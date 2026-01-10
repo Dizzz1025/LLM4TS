@@ -29,6 +29,7 @@ import json
 import os.path as osp
 
 from .PerceiverResampler import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
+# from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 # IGNORE_INDEX = -100
 # DEFAULT_STHIS_TOKEN = "<ST_HIS>"
 # DEFAULT_STPRE_TOKEN = "<ST_PRE>"
@@ -127,7 +128,7 @@ class STLlamaModel(LlamaModel):
         ])
         
         self.gradient_checkpointing = True
-
+    
     def forward(
             self,
             input_ids: torch.LongTensor = None,
@@ -149,13 +150,14 @@ class STLlamaModel(LlamaModel):
         ) # 是否返回每一层的hidden_state，而不是最后一层
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
+        target_dtype = self.st_projector.weight.dtype
         # ------------------------------------------------------------------
         # 1. Temporal Encoding: h -> Resampler -> Latents
         # ------------------------------------------------------------------
         if h is not None:
             # h: [Batch, Seq, Hidden]
             # Output: [Batch, Num_Latents, Hidden]
+            h = h.to(target_dtype)
             h_projected = self.st_projector(h)
             latents = self.resampler(h_projected)
         else:
@@ -195,8 +197,9 @@ class STLlamaModel(LlamaModel):
             # PerceiverResampler.py 中的 TimeEmbedding 会对输入进行 unsqueeze(-1) 扩展维度
             # 输入 norm_time: [Num_Obs]
             # 内部计算: [Num_Obs, 1] * [1, 1, D/2] -> [1, Num_Obs, D/2] -> cat -> [1, Num_Obs, D]
+            norm_time = norm_time.to(target_dtype)
             time_embeds = self.time_embedding(norm_time)
-            
+            time_embeds = time_embeds.to(target_dtype)
             # 如果输出是 3D [1, Num_Obs, D]，我们需要去除 batch 维度以匹配 inputs_embeds
             if time_embeds.dim() == 3: 
                 time_embeds = time_embeds.squeeze(0) # -> [Num_Obs, D]
@@ -208,15 +211,15 @@ class STLlamaModel(LlamaModel):
             combined_embeds_list.append(combined)
             
             # 记录 Mask: 0 for text, 1 for query slots
-            q_mask = torch.zeros(combined.shape[0], device=device)
+            q_mask = torch.zeros(combined.shape[0], device=device, dtype=target_dtype)
             q_mask[len(text_emb):] = 1
             query_slots_mask_list.append(q_mask)
 
         # Pad to max length in batch
         max_len = max([x.shape[0] for x in combined_embeds_list])
-        padded_embeds = torch.zeros(batch_size, max_len, self.config.hidden_size, device=device)
-        padded_attention_mask = torch.zeros(batch_size, max_len, device=device)
-        final_query_mask = torch.zeros(batch_size, max_len, device=device) # [B, Max_Len]
+        padded_embeds = torch.zeros(batch_size, max_len, self.config.hidden_size, device=device, dtype=target_dtype)
+        padded_attention_mask = torch.zeros(batch_size, max_len, device=device, dtype=target_dtype)
+        final_query_mask = torch.zeros(batch_size, max_len, device=device, dtype=target_dtype) # [B, Max_Len]
         new_position_ids = torch.arange(0, max_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, max_len)
         for b in range(batch_size):
             length = combined_embeds_list[b].shape[0]
@@ -233,9 +236,16 @@ class STLlamaModel(LlamaModel):
                 padded_embeds,
                 0
             )
+        #     causal_mask = _prepare_4d_causal_attention_mask(
+        #     mask_to_use,
+        #     (batch_size, max_len),
+        #     padded_embeds,
+        #     past_key_values_length=0
+        # )
         else:
             causal_mask = attention_mask
-
+        if causal_mask is not None:
+            causal_mask = causal_mask.to(target_dtype)
         hidden_states = padded_embeds
         # attention_mask 仅用于处理 padding
         attention_mask = padded_attention_mask
@@ -255,23 +265,31 @@ class STLlamaModel(LlamaModel):
 
             if self.gradient_checkpointing and self.training:
                 # 显存优化关键：包裹 checkpoint
-                def checkpoint_fn(hidden, mask, pos, pkv):
-                    layer_res = decoder_layer(hidden, attention_mask=mask, position_ids=pos, past_key_value=pkv)
-                    out = layer_res[0]
-                    if target_gca is not None:
-                        out = target_gca(out, latents)
-                    return out
-                
-                # 注意：此处直接传入 padded_attention_mask
+                # 2. 显式传递所有依赖项：张量 + 模块
+                def checkpoint_fn(hidden, mask, pos):
+                    if mask is not None:
+                        mask = mask.to(hidden.dtype)
+
+                    layer_out = decoder_layer(
+                        hidden,
+                        attention_mask=mask,
+                        position_ids=pos,
+                        past_key_value=None
+                    )
+                    return layer_out[0]
+
                 hidden_states = torch.utils.checkpoint.checkpoint(
-                    checkpoint_fn, hidden_states, causal_mask, new_position_ids, None,
+                    checkpoint_fn,
+                    hidden_states,
+                    causal_mask,
+                    new_position_ids,
                     use_reentrant=False
                 )
             else:
                 layer_outputs = decoder_layer(hidden_states, attention_mask=causal_mask, position_ids=new_position_ids)
                 hidden_states = layer_outputs[0]
-                if target_gca is not None:
-                    hidden_states = target_gca(hidden_states, latents)
+            if target_gca is not None:
+                hidden_states = target_gca(hidden_states, latents)
 
         hidden_states = self.norm(hidden_states)
 
@@ -347,7 +365,7 @@ class STLlamaForCausalLM(LlamaForCausalLM):
             obs_mask_60 = torch.zeros_like(mask_obs)
             obs_mask_60[:, 60:] = mask_obs[:, 60:]
             obs_mask_60 = obs_mask_60.bool() # gt.shape = [1, 120, 2]
-            true_values = gt[obs_mask_60]
+            true_values = gt[obs_mask_60].to(preds.device).to(preds.dtype)
             # Calculate Loss
             loss_fct = MSELoss()
             loss = loss_fct(preds, true_values)

@@ -9,9 +9,9 @@ export WANDB_MODE=offline
 
 # 2. 启动分布式训练
 # 注意：如果 GPU 显存不足（如 3090/4090），建议将 nproc_per_node 设小或调低 batch_size
-# python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port=20001 \
-#     urbangpt/train/train_mem.py \
-python urbangpt/train/train_mem.py \
+python -m torch.distributed.run --nnodes=1 --nproc_per_node=2 --master_port=20001 \
+    urbangpt/train/train_mem.py \
+# python urbangpt/train/train_mem.py \
     --model_name_or_path ${model_path} \
     --version v1 \
     --data_path ${instruct_ds} \
@@ -23,11 +23,10 @@ python urbangpt/train/train_mem.py \
     --output_dir ${output_model} \
     --num_train_epochs 3 \
     --per_device_train_batch_size 1 \
-    --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 32 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 16 \
     --evaluation_strategy "no" \
-    --save_strategy "steps" \
-    --save_steps 50 \
+    --save_strategy "epoch" \
     --save_total_limit 3 \
     --learning_rate 2e-4 \
     --weight_decay 0. \
@@ -37,6 +36,5 @@ python urbangpt/train/train_mem.py \
     --tf32 True \
     --model_max_length 2048 \
     --gradient_checkpointing True \
-    # --lazy_preprocess True \
-    --report_to wandb
+    --report_to wandb \
 

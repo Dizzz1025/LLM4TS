@@ -134,14 +134,14 @@ class DataCollatorForSTLlama(object):
         )
         # 显式生成 position_ids [batch, seq_len]
         batch_size, seq_len = input_ids.shape
-        position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
+        position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len).clone()
         
         # 对时间序列特征 h 进行 Padding [B, T_max, D]
-        h = torch.nn.utils.rnn.pad_sequence(h, batch_first=True, padding_value=0.0)
+        h = torch.nn.utils.rnn.pad_sequence(h, batch_first=True, padding_value=0.0).contiguous()
         
         # 对 mask 和 gt 进行 Padding [B, T_max]
-        mask_obs = torch.nn.utils.rnn.pad_sequence(mask_obs, batch_first=True, padding_value=0)
-        gt = torch.nn.utils.rnn.pad_sequence(gt, batch_first=True, padding_value=0.0)
+        mask_obs = torch.nn.utils.rnn.pad_sequence(mask_obs, batch_first=True, padding_value=0).contiguous()
+        gt = torch.nn.utils.rnn.pad_sequence(gt, batch_first=True, padding_value=0.0).contiguous()
 
         batch = dict(
             input_ids=input_ids,
@@ -170,6 +170,11 @@ def train():
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    local_rank = getattr(training_args, "local_rank", -1)
+    device_map = None
+    if local_rank != -1:
+        device_map = {"": local_rank}
+
     # 初始化配置与模型
     config = STLlamaConfig.from_pretrained(model_args.model_name_or_path)
     config.resampler_num_latents = model_args.resampler_num_latents
@@ -177,9 +182,14 @@ def train():
     model = STLlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         config=config,
-        cache_dir=training_args.cache_dir
+        cache_dir=training_args.cache_dir,
+        device_map=device_map,
+        torch_dtype=(torch.bfloat16 if training_args.bf16 else torch.float32)
     )
 
+    if training_args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
@@ -210,13 +220,20 @@ def train():
         **data_module
     )
 
+    # 7. 训练过程
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)
     else:
         trainer.train()
         
     trainer.save_state()
-    model.save_pretrained(training_args.output_dir)
+    
+    # 8. 安全保存：只在主进程执行
+    if trainer.is_world_process_zero():
+        # 保存模型权重和配置文件
+        model.save_pretrained(training_args.output_dir)
+        # 别忘了保存 tokenizer，方便推理时直接加载
+        tokenizer.save_pretrained(training_args.output_dir)
 
 if __name__ == "__main__":
     train()
