@@ -30,15 +30,24 @@ from transformers import Trainer
 
 from urbangpt.model import *
 
+import numpy as np
+
+import random
 IGNORE_INDEX = -100
 
+def setup_seed(seed):
+     torch.manual_seed(seed)
+     torch.cuda.manual_seed_all(seed)
+     np.random.seed(seed)
+     random.seed(seed)
+     torch.backends.cudnn.deterministic = True
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
     version: Optional[str] = field(default="v1")
     freeze_backbone: bool = field(default=False)
     tune_st_mlp_adapter: bool = field(default=False)
-    resampler_num_latents: int = field(default=64)
+    resampler_num_latents: int = field(default=5)
 
 @dataclass
 class DataArguments:
@@ -65,7 +74,10 @@ class LazySupervisedDataset(Dataset):
         
         # 假设 st_data_path 是一个保存了 'h', 'mask', 'gt' 的 .pt 或 .pkl 文件
         # 也可以根据你的实际存储格式（如每个样本一个文件）在这里修改加载逻辑
-        self.st_features = torch.load(st_data_path) 
+        st_npz = np.load(st_data_path, allow_pickle=True)
+        self.h_dict = st_npz['h']
+        self.mask_dict = st_npz['mask']
+        self.gt_dict = st_npz['gt'] 
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -88,10 +100,14 @@ class LazySupervisedDataset(Dataset):
 
         # 2. 获取对应的时间序列特征
         # h: [T, D], mask: [T], gt: [T]
-        st_feat = self.st_features[sample_id]
-        h = st_feat['h']
-        mask = st_feat['mask']
-        gt = st_feat['gt']
+        h_val = self.h_dict[sample_id]
+        mask_val = self.mask_dict[sample_id]
+        gt_val = self.gt_dict[sample_id]
+        
+        # 转换为 torch.Tensor
+        h = torch.from_numpy(h_val).float()
+        mask = torch.from_numpy(mask_val).float()
+        gt = torch.from_numpy(gt_val).float()
 
         return dict(
             input_ids=input_ids,
@@ -116,6 +132,9 @@ class DataCollatorForSTLlama(object):
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
         )
+        # 显式生成 position_ids [batch, seq_len]
+        batch_size, seq_len = input_ids.shape
+        position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
         
         # 对时间序列特征 h 进行 Padding [B, T_max, D]
         h = torch.nn.utils.rnn.pad_sequence(h, batch_first=True, padding_value=0.0)
@@ -126,6 +145,7 @@ class DataCollatorForSTLlama(object):
 
         batch = dict(
             input_ids=input_ids,
+            position_ids=position_ids,
             h=h,
             mask_obs=mask_obs,
             gt=gt,
@@ -146,6 +166,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
 
 def train():
+    setup_seed(42)
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 

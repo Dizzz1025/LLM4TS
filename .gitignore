@@ -216,3 +216,5 @@ __marimo__/
 *.pkl
 *.pth
 *.json
+*checkpoints*
+*wandb/

@@ -28,7 +28,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 import json
 import os.path as osp
 
-from models.resampler.PerceiverResampler import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
+from .PerceiverResampler import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
 # IGNORE_INDEX = -100
 # DEFAULT_STHIS_TOKEN = "<ST_HIS>"
 # DEFAULT_STPRE_TOKEN = "<ST_PRE>"
@@ -66,6 +66,8 @@ class STLlamaConfig(LlamaConfig):
         self.resampler_heads = kwargs.get("resampler_heads", 8)
         self.resampler_dim_head = kwargs.get("resampler_dim_head", 64)
         self.st_input_dim = kwargs.get("st_input_dim", 50) # 默认输入维度，根据你的 ODE 输出修改
+        self.gca_layer_interval = kwargs.get("gca_layer_interval", 16)
+        self.target_dim = kwargs.get("target_dim", 2) # 目标预测变量的数量（例：inflow和outflow，2)
         # 默认不使用 immediate media attention 限制
         self.only_attend_immediate_media = kwargs.get("only_attend_immediate_media", False)
 
@@ -114,20 +116,23 @@ class STLlamaModel(LlamaModel):
         
         # 3. Gated Cross Attention Layers (插入到每一层 Llama Block 之后)
         # 这里的 GatedCrossAttentionBlock 来自 PerceiverResampler.py
+        self.gca_interval = config.gca_layer_interval
+        num_gca_layers = config.num_hidden_layers // self.gca_interval
         self.gca_layers = nn.ModuleList([
             GatedCrossAttentionBlock(
                 dim=config.hidden_size,
                 heads=config.resampler_heads,
                 dim_head=config.resampler_dim_head
-            ) for _ in range(config.num_hidden_layers)
+            ) for _ in range(num_gca_layers)
         ])
         
-        self.gradient_checkpointing = False
+        self.gradient_checkpointing = True
 
     def forward(
             self,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
             use_cache: Optional[bool] = None,
@@ -212,12 +217,24 @@ class STLlamaModel(LlamaModel):
         padded_embeds = torch.zeros(batch_size, max_len, self.config.hidden_size, device=device)
         padded_attention_mask = torch.zeros(batch_size, max_len, device=device)
         final_query_mask = torch.zeros(batch_size, max_len, device=device) # [B, Max_Len]
-
+        new_position_ids = torch.arange(0, max_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, max_len)
         for b in range(batch_size):
             length = combined_embeds_list[b].shape[0]
             padded_embeds[b, :length] = combined_embeds_list[b]
             padded_attention_mask[b, :length] = 1 
             final_query_mask[b, :length] = query_slots_mask_list[b]
+
+        # --- 掩码处理：2D -> 4D ---
+        if attention_mask is None or attention_mask.dim() == 2:
+            mask_to_use = padded_attention_mask
+            causal_mask = self._prepare_decoder_attention_mask(
+                mask_to_use,
+                (batch_size, max_len),
+                padded_embeds,
+                0
+            )
+        else:
+            causal_mask = attention_mask
 
         hidden_states = padded_embeds
         # attention_mask 仅用于处理 padding
@@ -229,47 +246,39 @@ class STLlamaModel(LlamaModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
 
-        for i, (decoder_layer, gca_layer) in enumerate(zip(self.layers, self.gca_layers)):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+        gca_idx = 0
+        for i, decoder_layer in enumerate(self.layers):
+            target_gca = None
+            if (i + 1) % self.gca_interval == 0 and gca_idx < len(self.gca_layers):
+                target_gca = self.gca_layers[gca_idx]
+                gca_idx += 1
 
-            # Standard Llama Layer Forward
-            # 我们不传递 attention_mask (除了 padding)，让 Llama 内部处理 causal mask
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=None, 
-                position_ids=None,
-                past_key_value=past_key_values[i] if past_key_values else None,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-            )
-
-            hidden_states = layer_outputs[0]
-
-            # Injected Gated Cross Attention: LLM States <-> Time Latents
-            # gca_layer 来自 PerceiverResampler.py，输入为 (x, media)
-            hidden_states = gca_layer(hidden_states, latents)
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
+            if self.gradient_checkpointing and self.training:
+                # 显存优化关键：包裹 checkpoint
+                def checkpoint_fn(hidden, mask, pos, pkv):
+                    layer_res = decoder_layer(hidden, attention_mask=mask, position_ids=pos, past_key_value=pkv)
+                    out = layer_res[0]
+                    if target_gca is not None:
+                        out = target_gca(out, latents)
+                    return out
+                
+                # 注意：此处直接传入 padded_attention_mask
+                hidden_states = torch.utils.checkpoint.checkpoint(
+                    checkpoint_fn, hidden_states, causal_mask, new_position_ids, None,
+                    use_reentrant=False
+                )
+            else:
+                layer_outputs = decoder_layer(hidden_states, attention_mask=causal_mask, position_ids=new_position_ids)
+                hidden_states = layer_outputs[0]
+                if target_gca is not None:
+                    hidden_states = target_gca(hidden_states, latents)
 
         hidden_states = self.norm(hidden_states)
 
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-
-        # 保存 query mask 供 Head 使用
-        self._last_query_mask = final_query_mask
-        self._prediction_mask_obs = torch.stack(prediction_mask_list)
-        
-        if not return_dict:
-            return tuple(v for v in [hidden_states, past_key_values, all_hidden_states, all_self_attns] if v is not None)
-            
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=past_key_values,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
+            # 将 query_mask 传递出去供 Head 使用
+            past_key_values=final_query_mask 
         )
 
 
@@ -287,7 +296,7 @@ class STLlamaForCausalLM(LlamaForCausalLM):
         self.predict_head = nn.Sequential(
             nn.Linear(config.hidden_size, config.hidden_size),
             nn.GELU(),
-            nn.Linear(config.hidden_size, 1) 
+            nn.Linear(config.hidden_size, config.target_dim) 
         )
 
         self.post_init()
@@ -296,6 +305,7 @@ class STLlamaForCausalLM(LlamaForCausalLM):
             self,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
             labels: Optional[torch.LongTensor] = None,
             h: Optional[torch.Tensor] = None,          # [B, T_raw, D]
@@ -313,37 +323,41 @@ class STLlamaForCausalLM(LlamaForCausalLM):
             h=h,
             mask_obs=mask_obs,
             return_dict=True,
+            position_ids=position_ids,
             **kwargs
         )
 
         hidden_states = outputs.last_hidden_state
-        query_mask = self.model._last_query_mask # [B, Seq_Len]
-        prediction_mask = self.model._prediction_mask_obs # 仅含后60步观测点的掩码        
+        # query_mask = self.model._last_query_mask # [B, Seq_Len]
+        final_query_mask = outputs.past_key_values.bool() 
+        # prediction_mask = self.model._prediction_mask_obs # 仅含后60步观测点的掩码        
         
         loss = None
         if gt is not None:
             # Flatten hidden states using mask
             # 只提取是 Query Slot 的那些 hidden state
-            pred_hidden = hidden_states[query_mask.bool()] 
+            pred_hidden = hidden_states[final_query_mask] 
             
             # Predict
-            preds = self.predict_head(pred_hidden).squeeze(-1) # [Total_Query_Slots]
+            preds = self.predict_head(pred_hidden) # [Total_Query_Slots]
             
             # Flatten GT using the SAME mask logic
             # mask_obs 和 query_mask 在逻辑上是对齐的（按顺序生成）
             # 直接使用 mask_obs 提取对应的 GT 值
-            true_values = gt[prediction_mask.bool()] # [Total_Query_Slots]
-            
+            obs_mask_60 = torch.zeros_like(mask_obs)
+            obs_mask_60[:, 60:] = mask_obs[:, 60:]
+            obs_mask_60 = obs_mask_60.bool() # gt.shape = [1, 120, 2]
+            true_values = gt[obs_mask_60]
             # Calculate Loss
             loss_fct = MSELoss()
             loss = loss_fct(preds, true_values)
 
         return CausalLMOutputWithPast(
             loss=loss,
-            logits=None, 
+            # logits=None, 
             past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            hidden_states=(hidden_states,),
+            # attentions=outputs.attentions,
         )
 
 # 注册配置和模型
