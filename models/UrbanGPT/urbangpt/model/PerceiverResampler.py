@@ -132,7 +132,6 @@ class TimeEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.freq = nn.Parameter(torch.randn(dim // 2) * 0.1)
-
     def forward(self, t):  # t: [B, Nq]
         # expand
         t = t.unsqueeze(-1)                    # [B, Nq, 1]

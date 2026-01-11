@@ -103,6 +103,7 @@ class STLlamaModel(LlamaModel):
     def __init__(self, config: LlamaConfig):
         super(STLlamaModel, self).__init__(config)
         self.st_projector = nn.Linear(config.st_input_dim, config.hidden_size)
+        # self.st_norm = nn.LayerNorm(config.st_input_dim)
         # 1. Perceiver Resampler: 将 h (ODE Hidden States) 压缩为 Latents
         self.resampler = PerceiverResampler(
             dim=config.hidden_size,
@@ -158,6 +159,7 @@ class STLlamaModel(LlamaModel):
             # h: [Batch, Seq, Hidden]
             # Output: [Batch, Num_Latents, Hidden]
             h = h.to(target_dtype)
+            # h = self.st_norm(h.float()).to(target_dtype)
             h_projected = self.st_projector(h)
             latents = self.resampler(h_projected)
         else:
@@ -259,7 +261,7 @@ class STLlamaModel(LlamaModel):
         gca_idx = 0
         for i, decoder_layer in enumerate(self.layers):
             target_gca = None
-            if (i + 1) % self.gca_interval == 0 and gca_idx < len(self.gca_layers):
+            if i % self.gca_interval == 0 and gca_idx < len(self.gca_layers):
                 target_gca = self.gca_layers[gca_idx]
                 gca_idx += 1
 

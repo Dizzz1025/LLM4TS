@@ -171,9 +171,9 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     local_rank = getattr(training_args, "local_rank", -1)
-    device_map = None
-    if local_rank != -1:
-        device_map = {"": local_rank}
+    # device_map = None
+    # if local_rank != -1:
+    #     device_map = {"": local_rank}
 
     # 初始化配置与模型
     config = STLlamaConfig.from_pretrained(model_args.model_name_or_path)
@@ -183,7 +183,7 @@ def train():
         model_args.model_name_or_path,
         config=config,
         cache_dir=training_args.cache_dir,
-        device_map=device_map,
+        # device_map=device_map,
         torch_dtype=(torch.bfloat16 if training_args.bf16 else torch.float32)
     )
 
