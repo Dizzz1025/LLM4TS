@@ -210,6 +210,8 @@ def train():
     model.model.time_embedding.requires_grad_(True)
     model.model.gca_layers.requires_grad_(True)
     model.predict_head.requires_grad_(True)
+    
+    trainable = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     

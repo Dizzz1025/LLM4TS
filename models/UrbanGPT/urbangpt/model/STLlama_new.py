@@ -128,7 +128,7 @@ class STLlamaModel(LlamaModel):
             ) for _ in range(num_gca_layers)
         ])
         
-        self.gradient_checkpointing = True
+        self.gradient_checkpointing = False
     
     def forward(
             self,
@@ -265,40 +265,49 @@ class STLlamaModel(LlamaModel):
                 target_gca = self.gca_layers[gca_idx]
                 gca_idx += 1
 
-            if self.gradient_checkpointing and self.training:
-                # 显存优化关键：包裹 checkpoint
-                # 2. 显式传递所有依赖项：张量 + 模块
-                def checkpoint_fn(hidden, mask, pos):
-                    if mask is not None:
-                        mask = mask.to(hidden.dtype)
+            # if self.gradient_checkpointing and self.training:
+            #     # 显存优化关键：包裹 checkpoint
+            #     # 2. 显式传递所有依赖项：张量 + 模块
+            #     def checkpoint_fn(hidden, mask, pos):
+            #         if mask is not None:
+            #             mask = mask.to(hidden.dtype)
 
-                    layer_out = decoder_layer(
-                        hidden,
-                        attention_mask=mask,
-                        position_ids=pos,
-                        past_key_value=None
-                    )
-                    return layer_out[0]
+            #         layer_out = decoder_layer(
+            #             hidden,
+            #             attention_mask=mask,
+            #             position_ids=pos,
+            #             past_key_value=None
+            #         )
+            #         return layer_out[0]
 
-                hidden_states = torch.utils.checkpoint.checkpoint(
-                    checkpoint_fn,
-                    hidden_states,
-                    causal_mask,
-                    new_position_ids,
-                    use_reentrant=False
-                )
-            else:
-                layer_outputs = decoder_layer(hidden_states, attention_mask=causal_mask, position_ids=new_position_ids)
-                hidden_states = layer_outputs[0]
+            #     hidden_states = torch.utils.checkpoint.checkpoint(
+            #         checkpoint_fn,
+            #         hidden_states,
+            #         causal_mask,
+            #         new_position_ids,
+            #         use_reentrant=False
+            #     )
+            # else:
+            #     layer_outputs = decoder_layer(hidden_states, attention_mask=causal_mask, position_ids=new_position_ids)
+            #     hidden_states = layer_outputs[0]
+            layer_outputs = decoder_layer(
+                hidden_states, 
+                attention_mask=causal_mask, 
+                position_ids=new_position_ids,
+                past_key_value=None,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+            hidden_states = layer_outputs[0]
             if target_gca is not None:
                 hidden_states = target_gca(hidden_states, latents)
 
         hidden_states = self.norm(hidden_states)
-
+        self._final_query_mask = final_query_mask
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             # 将 query_mask 传递出去供 Head 使用
-            past_key_values=final_query_mask 
+            past_key_values=None 
         )
 
 
@@ -349,7 +358,7 @@ class STLlamaForCausalLM(LlamaForCausalLM):
 
         hidden_states = outputs.last_hidden_state
         # query_mask = self.model._last_query_mask # [B, Seq_Len]
-        final_query_mask = outputs.past_key_values.bool() 
+        final_query_mask = self.model._final_query_mask.bool() 
         # prediction_mask = self.model._prediction_mask_obs # 仅含后60步观测点的掩码        
         
         loss = None

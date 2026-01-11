@@ -28,13 +28,13 @@ python urbangpt/train/train_mem.py \
     --evaluation_strategy "no" \
     --save_strategy "epoch" \
     --save_total_limit 3 \
-    --learning_rate 2e-5 \
+    --learning_rate 2e-4 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "constant" \
     --logging_steps 1 \
     --tf32 True \
     --model_max_length 2048 \
-    --gradient_checkpointing True \
+    --gradient_checkpointing False \
     --report_to wandb \
 
