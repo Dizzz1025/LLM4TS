@@ -2,7 +2,7 @@
 model_path=./checkpoints/vicuna-7b-v1.5-16k  # 确保此目录下有 config.json 和权重
 instruct_ds=./data/Sim/train/Sim_prompts.json   # 你刚才生成的 JSON 文件
 st_data_path=./data/Sim/train/train_data.npz # 包含 h, mask, gt 的 PT 文件
-output_model=./checkpoints/UrbanGPT_v2
+output_model=./checkpoints/UrbanGPT_v4
 
 # 离线运行 wandb
 export WANDB_MODE=offline
@@ -21,8 +21,8 @@ python urbangpt/train/train_mem.py \
     --resampler_num_latents 5 \
     --bf16 True \
     --output_dir ${output_model} \
-    --num_train_epochs 3 \
-    --per_device_train_batch_size 32 \
+    --num_train_epochs 100 \
+    --per_device_train_batch_size 64 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "no" \
@@ -31,7 +31,7 @@ python urbangpt/train/train_mem.py \
     --learning_rate 2e-4 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
-    --lr_scheduler_type "constant" \
+    --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --tf32 True \
     --model_max_length 2048 \

@@ -218,3 +218,5 @@ __marimo__/
 *.json
 *checkpoints*
 *wandb/
+Logs/
+data*/

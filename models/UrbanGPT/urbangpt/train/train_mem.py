@@ -27,8 +27,8 @@ replace_llama_attn_with_flash_attn()
 from urbangpt.train.train_st_new import train
 
 if __name__ == "__main__":
-    import debugpy
-    debugpy.listen(("0.0.0.0", 5678))
-    print("Waiting for debugger attach...")
-    debugpy.wait_for_client()
+    # import debugpy
+    # debugpy.listen(("0.0.0.0", 5678))
+    # print("Waiting for debugger attach...")
+    # debugpy.wait_for_client()
     train()

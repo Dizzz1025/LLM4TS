@@ -39,9 +39,9 @@ def test_inference(model_path, st_data_path, device="cuda"):
     print(f"Loading test data from {st_data_path}...")
     st_npz = np.load(st_data_path, allow_pickle=True)
     
-    h_all = st_npz['h'][:500]
-    mask_all = st_npz['mask'][:500]
-    gt_all = st_npz['gt'][:500]
+    h_all = st_npz['h']
+    mask_all = st_npz['mask']
+    gt_all = st_npz['gt']
     
     num_samples = h_all.shape[0]
     print(f"Detected {num_samples} samples.")
@@ -77,14 +77,13 @@ def test_inference(model_path, st_data_path, device="cuda"):
             
             hidden_states = outputs.hidden_states[0]
             # 模型内部会将 final_query_mask 存放在 past_key_values 中返回
-            final_query_mask = outputs.past_key_values.bool()
-            
+            final_query_mask = model.model._final_query_mask.bool()
+            final_query_mask[:, -24] = False
             # 使用掩码提取预测值
             preds = model.predict_head(hidden_states[final_query_mask]) 
-
             # 对齐真值：对应后 60 步的观测点
             query_mask_2d = torch.zeros_like(mask_obs)
-            query_mask_2d[:, 60:] = mask_obs[:, 60:]
+            query_mask_2d[:, 61:] = mask_obs[:, 61:]
             query_mask_2d = query_mask_2d.bool()
             gt_aligned = gt[query_mask_2d]
 
@@ -95,26 +94,35 @@ def test_inference(model_path, st_data_path, device="cuda"):
                 print(f"Processed {i + 1}/{num_samples}...")
 
     # 4. 指标计算
-    all_preds = torch.cat(all_preds, dim=0)
-    all_gts = torch.cat(all_gts, dim=0)
-
+    all_preds = torch.cat(all_preds, dim=0) # [11500, 2]
+    all_gts = torch.cat(all_gts, dim=0) # [11500, 2]
+    print('all_preds.shape:', all_preds.shape)
+    print('all_gts.shape:', all_gts.shape)
+    
     mse = torch.nn.functional.mse_loss(all_preds, all_gts).item()
     mae = torch.nn.functional.l1_loss(all_preds, all_gts).item()
-
+    sq = (all_preds - all_gts) ** 2
+    num = sq.numel()          # 除以的元素个数 = N*D
+    # mse_my = (sq.sum() / num).item()
     print("\n" + "="*30)
     print(f"Overall Test Results:")
     print(f"Total Prediction Points: {all_preds.shape[0]}")
+    print("num elements:", num)
     print(f"Overall MSE: {mse:.4f}")
     print(f"Overall MAE: {mae:.4f}")
     print("="*30)
-
+    preds_np = all_preds.detach().cpu().numpy()
+    gts_np   = all_gts.detach().cpu().numpy()
+    np.savez("preds_gts.npz", preds=preds_np, gts=gts_np)
+    print("saved to preds_gts.npz")
+    
     # 5. 可视化检查 (展示最后一个样本的部分序列)
     plt.figure(figsize=(10, 5))
     draw_len = min(48, len(preds)) # 绘制前 48 个预测点
     
     # 假设数据是多维的，我们只绘制第一个维度 [:, 0]
-    plt.plot(all_gts[-draw_len:, 0], label='Ground Truth', color='blue', marker='o', markersize=4)
-    plt.plot(all_preds[-draw_len:, 0], label='Prediction', color='red', linestyle='--', marker='x', markersize=4)
+    plt.plot(all_gts[:draw_len, 0], all_gts[:draw_len, 1], label='Ground Truth', color='blue', marker='o', markersize=4)
+    plt.plot(all_preds[:draw_len, 0], all_preds[:draw_len, 1], label='Prediction', color='red', linestyle='--', marker='x', markersize=4)
     
     plt.title(f"Inference Visual Check (MSE: {mse:.4f})")
     plt.xlabel("Time Step")
@@ -122,14 +130,14 @@ def test_inference(model_path, st_data_path, device="cuda"):
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    save_path = "test_mse_visual.png"
+    save_path = "test_mse_charged_visual1.png"
     plt.savefig(save_path)
     print(f"Visual check plot saved to: {save_path}")
 
 if __name__ == "__main__":
     # 根据你的环境修改路径
-    MODEL_PATH = f"{project_root}/checkpoints/UrbanGPT_v1/checkpoint-50"
-    DATA_PATH = f"{project_root}/data/Sim/test/test_data.npz"
+    MODEL_PATH = f"{project_root}/checkpoints/UrbanGPT_confirm/checkpoint-v1-50epoch"
+    DATA_PATH = f"{project_root}/data/Sim/charged/test/test_data.npz"
     
     if os.path.exists(MODEL_PATH) and os.path.exists(DATA_PATH):
         test_inference(MODEL_PATH, DATA_PATH)

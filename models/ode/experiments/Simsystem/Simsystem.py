@@ -70,7 +70,8 @@ def train_gruode(simulation_name,params_dict,device, train_idx, val_idx, test_id
                                             logvar = params_dict["logvar"], mixing = params_dict["mixing"],
                                             classification_hidden=params_dict["classification_hidden"],
                                             cov_size = params_dict["cov_size"], cov_hidden = params_dict["cov_hidden"],
-                                            dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], impute = params_dict["impute"])
+                                            dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], 
+                                            impute = params_dict["impute"], dataset='Sim')
     nnfwobj.to(device)
 
     optimizer = torch.optim.Adam(nnfwobj.parameters(), lr=params_dict["lr"], weight_decay= params_dict["weight_decay"])
@@ -286,19 +287,19 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test):
 
 if __name__ =="__main__":
 
-    simulation_name="Simsystem_v17_debug"
+    simulation_name="Simsystem_v17_charged"
     device = torch.device("cuda")
 
 
-    train_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_v4/small_chunk_fold_idx_0/train_idx.npy",allow_pickle=True)
-    val_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_v4/small_chunk_fold_idx_0/val_idx.npy",allow_pickle=True)
+    train_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_charged/small_chunk_fold_idx_0/train_idx.npy",allow_pickle=True)
+    val_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_charged/small_chunk_fold_idx_0/val_idx.npy",allow_pickle=True)
     # test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_binned/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
 
     #Model parameters.
     params_dict=dict()
 
-    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_v4/train/Simsystem_binned_norm.csv" 
-    params_dict["A_file"] = "../../preproc/Simsystem/data_v4/train/edges_train_springs5.npy" 
+    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_charged/train/Simsystem_binned_norm.csv" 
+    params_dict["A_file"] = "../../preproc/Simsystem/data_charged/train/edges_train_charged5.npy" 
     params_dict["csv_file_tags"] = None
     params_dict["csv_file_cov"]  = None
 
@@ -322,7 +323,7 @@ if __name__ =="__main__":
     params_dict["verbose"] = 0 #from 0 to 3 (highest)
 
     params_dict["T_val"] = 60
-    params_dict["max_val_samples"] = 3
+    params_dict["max_val_samples"] = None
 
 
 
