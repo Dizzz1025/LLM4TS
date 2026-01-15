@@ -280,11 +280,11 @@ def masked_mse(pred, gt, mask):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ODEPerceiverPredictor(dim=50, y_dim=2, perceiver_depth=2, num_latents=5).to(device)
-    data = np.load('./Sim/test_data.npz')
+    data = np.load('./Sim/charged_test_data.npz')
     h_cache = data["h"]      # (N, T, H)
     mask    = data["mask"]         # (N, T)
     gt      = data["gt"]           # (N, T, variable_num)
-    ckpt = torch.load("projection_model.pt", map_location=device)
+    ckpt = torch.load("charged_projection_model.pt", map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     test_dataset = HToGtDataset(h_cache, mask, gt)
