@@ -358,13 +358,13 @@ class GatedCrossAttentionBlock(nn.Module):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ODEPerceiverPredictor(dim=50, y_dim=2, perceiver_depth=2, num_latents=5).to(device)
-    data = np.load('./Sim/charged_test_data.npz')
+    data = np.load('./Sim/train_data.npz')
     h_cache = data["h"]      # (N, T, H)
     mask    = data["mask"]         # (N, T)
     gt      = data["gt"]           # (N, T, variable_num)
     dataset = HToGtDataset(h_cache, mask, gt)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     
     for epoch in range(150):
         model.train()
@@ -401,6 +401,6 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         print(f"Epoch {epoch:02d}  Loss = {total_loss:.6f}")
-        save_path = "charged_projection_model_lr5.pt"
+        save_path = "projection_model_test.pt"
         torch.save({"model_state_dict": model.state_dict()}, save_path)
     print("Model saved to:", save_path)

@@ -50,8 +50,8 @@ class PerceiverAttention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim, bias = False)
-
-    def forward(self, x, latents):
+        self.beta = nn.Parameter(torch.tensor(1.0))
+    def forward(self, x, latents, dynamics_bias=None, times=None):
         """
         einstein notation
         b - batch
@@ -82,13 +82,30 @@ class PerceiverAttention(nn.Module):
         # k: [b, h, n_media, d]
         # v: [b, h, n_media, d]
         sim = einsum('... i d, ... j d  -> ... i j', q, k)
+        # #### MODIFIED: Eq (12) - Inject dynamics information ####
+        if dynamics_bias is not None:
+            # dynamics_bias: [b, n_media] -> broadcast to [b, 1, 1, n_media]
+            bias = dynamics_bias.unsqueeze(1).unsqueeze(1)
+            # Ensure beta is non-negative as per paper
+            beta_val = F.softplus(self.beta) 
+            sim = sim + beta_val * bias
         # sim: [b, h, n_latents, n_media]
         sim = sim - sim.amax(dim = -1, keepdim = True).detach()
         attn = sim.softmax(dim = -1)
 
+        # #### MODIFIED: Eq (13) - Calculate Center Time ####
+        center_times = None
+        if times is not None:
+            # times: [b, n_media]
+            # attn: [b, h, n_latents, n_media]
+            # Weighted average of time per head:
+            t_weighted = einsum('b h i j, b j -> b h i', attn, times)
+            # Average over heads to get one time per latent token
+            center_times = t_weighted.mean(dim=1) # [b, n_latents]
+
         out = einsum('... i j, ... j d -> ... i d', attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)', h = h)
-        return self.to_out(out)
+        return self.to_out(out), center_times
 
 class PerceiverResampler(nn.Module):
     def __init__(
@@ -117,16 +134,37 @@ class PerceiverResampler(nn.Module):
 
         self.norm = nn.LayerNorm(dim)
 
-    def forward(self, x):
+    def forward(self, x, t_input=None):
         # times = x.shape[1]
         # x = x + self.media_pos_emb[:times]
-        latents = repeat(self.latents, 'n d -> b n d', b = x.shape[0]) # 每个样本用同一套查询模版，查询到的内容取决于输入x，latent学到的是怎么看
-
+        b, t, d = x.shape
+        latents = repeat(self.latents, 'n d -> b n d', b = b) # 每个样本用同一套查询模版，查询到的内容取决于输入x，latent学到的是怎么看
+        # 1. Compute Dynamics Magnitude (Eq 11)
+        # we approximate derivative using finite differences: ||h(t) - h(t-1)||
+        if t > 1:
+            # simple diff, padded at start to keep length T
+            diff = x[:, 1:] - x[:, :-1]
+            diff = torch.cat([torch.zeros(b, 1, d, device=x.device), diff], dim=1)
+        else:
+            diff = torch.zeros_like(x)
+        # s_i = || h_dot(t) ||_2
+        dynamics_mag = torch.norm(diff, p=2, dim=-1) # [B, T]
+        # Normalize s_i within each sequence to obtain s_tilde (Eq 11 text)
+        # Paper implies simple normalization, let's use division by max or sum.
+        # Here we use Max scaling per batch item for stability.
+        max_val = dynamics_mag.amax(dim=-1, keepdim=True).clamp(min=1e-5)
+        dynamics_norm = dynamics_mag / max_val # [B, T]
+        
+        final_center_times = None
+            
         for attn, ff in self.layers:
-            latents = attn(x, latents) + latents
+            attn_out, center_times = attn(x, latents, dynamics_bias=dynamics_norm, times=t_input)
+            latents = attn_out + latents
             latents = ff(latents) + latents
+            
+            final_center_times = center_times
 
-        return self.norm(latents)
+        return self.norm(latents), final_center_times
     
 class TimeEmbedding(nn.Module):
     def __init__(self, dim):
@@ -213,6 +251,7 @@ class ODEPerceiverPredictor(nn.Module):
         self,
         h_seq,      # [B, T, D]   ODE hidden states
         t_query,    # [B, Nq]     times to predict (obs or future)
+        t_input   # [B, T]
     ):
         """
         Returns:
@@ -223,9 +262,10 @@ class ODEPerceiverPredictor(nn.Module):
 
         # ---- Step 1: Perceiver compress history ----
         # perceiver expects x: [B, N, D]
-        latent = self.perceiver(h_seq)     # [B, K, D]
+        latent, center_times = self.perceiver(h_seq, t_input=t_input)     # [B, K, D]
 
-        # ---- Step 2: time embedding (query) ----
+        # ---- Step 2: time embedding (center time + query) ----
+        center_time_emb = self.time_emb(center_times) # [B, K, D]
         q_time = self.time_emb(t_query)    # [B, Nq, D]
 
         # ---- Step 3: cross attention ----
@@ -257,10 +297,19 @@ class ODEPerceiverPredictor(nn.Module):
 #     t_query = t_query / (T - 1)
 #     return t_query, torch.stack(gt_list)
 
+def build_t_input(T, device):
+    """
+    return:
+        t_input: [0, 119]  -> 可 broadcast 到 batch
+    """
+    idx = torch.arange(0, T, device=device).float()
+    t_query = idx / (T - 1)   # 归一化
+    return t_query.unsqueeze(0)  # [1, 60]
+
 def build_future_queries(T, device):
     """
     return:
-        t_query: [1, 60]  -> 可 broadcast 到 batch
+        t_query: [60, 119]  -> 可 broadcast 到 batch
     """
     idx = torch.arange(T - 60, T, device=device).float()
     t_query = idx / (T - 1)   # 归一化
@@ -364,7 +413,7 @@ if __name__ == "__main__":
     gt      = data["gt"]           # (N, T, variable_num)
     dataset = HToGtDataset(h_cache, mask, gt)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     
     for epoch in range(150):
         model.train()
@@ -383,13 +432,15 @@ if __name__ == "__main__":
 
             # ---- 构造 time query（代替 masked loss）----
             # t_query, gt_query = build_time_queries(gt_batch, mask_batch)
+            t_input = build_t_input(T=T, device=device)
             t_query = build_future_queries(T=T, device=device)
+            t_input = t_input.repeat(B, 1) # [B, T]
             t_query = t_query.repeat(B, 1)
             # t_query:  [B, Nq]
             # gt_query: [B, Nq, y_dim]
 
             # ---- forward ----
-            pred = model(h_batch, t_query)   # [B, Nq, y_dim]
+            pred = model(h_batch, t_query, t_input)   # [B, Nq, y_dim]
 
             # ---- loss ----
             loss = masked_mse(pred, gt_batch[:, -60:, :], mask_batch[:, -60:])
@@ -401,6 +452,6 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         print(f"Epoch {epoch:02d}  Loss = {total_loss:.6f}")
-        save_path = "charged_projection_model_lr5.pt"
+        save_path = "charged_projection_model_v2.pt"
         torch.save({"model_state_dict": model.state_dict()}, save_path)
     print("Model saved to:", save_path)

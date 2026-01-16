@@ -257,6 +257,15 @@ class ODEPerceiverPredictor(nn.Module):
 #     t_query = t_query / (T - 1)
 #     return t_query, torch.stack(gt_list)
 
+def build_t_input(T, device):
+    """
+    return:
+        t_input: [0, 119]  -> 可 broadcast 到 batch
+    """
+    idx = torch.arange(0, T, device=device).float()
+    t_query = idx / (T - 1)   # 归一化
+    return t_query.unsqueeze(0)  # [1, 60]
+
 def build_future_queries(T, device):
     """
     return:
@@ -280,11 +289,11 @@ def masked_mse(pred, gt, mask):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ODEPerceiverPredictor(dim=50, y_dim=2, perceiver_depth=2, num_latents=5).to(device)
-    data = np.load('./Sim/charged_test_data.npz')
+    data = np.load('./Sim/test_data.npz')
     h_cache = data["h"]      # (N, T, H)
     mask    = data["mask"]         # (N, T)
     gt      = data["gt"]           # (N, T, variable_num)
-    ckpt = torch.load("charged_projection_model.pt", map_location=device)
+    ckpt = torch.load("projection_model_test.pt", map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     test_dataset = HToGtDataset(h_cache, mask, gt)
@@ -302,7 +311,9 @@ if __name__ == "__main__":
             mask_batch = mask_batch.to(device)
             gt_batch = gt_batch.to(device)
 
+            t_input = build_t_input(T=T, device=device)
             t_query = build_future_queries(T=T, device=device)
+            t_input = t_input.repeat(B, 1)
             t_query = t_query.repeat(B, 1)
 
             pred = model(h_batch, t_query)   # [B,60,D]
