@@ -90,6 +90,12 @@ class ODE_Dataset(Dataset):
                 assert self.cov_df.columns[0]=="ID"
         if A_file is not None:
             self.A_all = np.load(A_file)
+        adj_dict = {
+            1: np.load("/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCtaxi/data_accu/train/adjacency_matrix_80x80.npy"),
+            2: np.load("/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCbike/data_accu/train/adjacency_matrix_80x80.npy"),
+            3: np.load("/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCcrime/data/train/adjacency_matrix_80x80.npy")
+        }
+        self.adj_dict = adj_dict
         #Create Dummy covariates and labels if they are not fed.
         if self.cov_df is None:
             num_unique = np.zeros(self.df["ID"].nunique())
@@ -195,9 +201,11 @@ class ODE_Dataset(Dataset):
         return self.length
 
     def __getitem__(self, idx):
-        A = self.A_all
+        # A = self.A_all
         subset = self.df.loc[idx]
         assert subset["group_ID"].iloc[0] == self.id2group[idx]
+        ds_id = int(subset["dataset_id"].iloc[0])
+        A = self.adj_dict[ds_id]
         if len(subset.shape)==1: #Don't ask me anything about this.
             subset = self.df.loc[[idx]]
         group_id = int(subset["group_ID"].iloc[0])  # 同一ID下应恒定

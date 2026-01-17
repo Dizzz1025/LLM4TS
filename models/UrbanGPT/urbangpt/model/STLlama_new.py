@@ -28,7 +28,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 import json
 import os.path as osp
 
-from .PerceiverResampler import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
+from .PerceiverResampler_bias import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
 # from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 # IGNORE_INDEX = -100
 # DEFAULT_STHIS_TOKEN = "<ST_HIS>"
@@ -63,6 +63,7 @@ class STLlamaConfig(LlamaConfig):
         super().__init__(**kwargs)
         # Resampler Config
         self.resampler_num_latents = kwargs.get("resampler_num_latents", 64)
+        self.text_resampler_num_latents = kwargs.get("text_resampler_num_latents", 5)
         self.resampler_depth = kwargs.get("resampler_depth", 2)
         self.resampler_heads = kwargs.get("resampler_heads", 8)
         self.resampler_dim_head = kwargs.get("resampler_dim_head", 64)
@@ -105,14 +106,22 @@ class STLlamaModel(LlamaModel):
         self.st_projector = nn.Linear(config.st_input_dim, config.hidden_size)
         # self.st_norm = nn.LayerNorm(config.st_input_dim)
         # 1. Perceiver Resampler: 将 h (ODE Hidden States) 压缩为 Latents
-        self.resampler = PerceiverResampler(
+        self.feat_resampler = PerceiverResampler(
             dim=config.hidden_size,
             depth=config.resampler_depth,
             heads=config.resampler_heads,
             dim_head=config.resampler_dim_head,
             num_latents=config.resampler_num_latents
         )
-        
+        # --- 新增：2. Text Resampler (Delta_text) ---
+        # 用于将详细的统计文本描述压缩为固定的 K 个 Token
+        self.text_resampler = PerceiverResampler(
+            dim=config.hidden_size,
+            depth=config.resampler_depth,
+            heads=config.resampler_heads,
+            dim_head=config.resampler_dim_head,
+            num_latents=config.text_resampler_num_latents
+        )
         # 2. Time Embedding: 将时间步编码为 Query Slot 的 Embedding
         self.time_embedding = TimeEmbedding(config.hidden_size)
         
@@ -129,10 +138,15 @@ class STLlamaModel(LlamaModel):
         ])
         
         self.gradient_checkpointing = False
+        
+        # 添加时间嵌入强度系数，初始化为较小值（如 0.1 或 0.0）
+        self.time_embed_scale = nn.Parameter(torch.tensor(0.1))
     
     def forward(
             self,
             input_ids: torch.LongTensor = None,
+            stat_input_ids: torch.LongTensor = None,    # --- 新增输入 ---
+            stat_attention_mask: Optional[torch.Tensor] = None, # --- 新增输入 ---
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
@@ -155,16 +169,33 @@ class STLlamaModel(LlamaModel):
         # ------------------------------------------------------------------
         # 1. Temporal Encoding: h -> Resampler -> Latents
         # ------------------------------------------------------------------
+        # Path A: Feature Prior (Delta_feat)
         if h is not None:
             # h: [Batch, Seq, Hidden]
             # Output: [Batch, Num_Latents, Hidden]
             h = h.to(target_dtype)
             # h = self.st_norm(h.float()).to(target_dtype)
             h_projected = self.st_projector(h)
-            latents = self.resampler(h_projected)
+            feat_kv, center_times = self.feat_resampler(h_projected)
         else:
             raise ValueError("Input 'h' (ODE hidden variables) is required.")
-
+        
+        if center_times is not None:
+            # 使用 model 内置的 time_embedding 模块进行编码
+            # time_emb_out: [B, K, D]
+            time_emb_out = self.time_embedding(center_times)
+            
+            # 按照公式: feat_kv = feat_kv + gamma * time_embedding(center_times)
+            # self.time_embed_scale 即为你要求的可学习系数
+            feat_kv = feat_kv + self.time_embed_scale * time_emb_out
+            
+        # Path B: Text Prior (Delta_text) - 新增逻辑
+        if stat_input_ids is not None:
+            # 使用 LLM 自带的 Embedding 层将统计文本 ID 转换为向量
+            stat_embeds = self.embed_tokens(stat_input_ids).to(target_dtype)
+            # 通过第二个 Resampler 压缩
+            text_kv = self.text_resampler(stat_embeds) # [B, Text_Latents, D]
+            
         # ------------------------------------------------------------------
         # 2. Construct Prompt: [Text Prompt] + [Query Slots]
         # ------------------------------------------------------------------
@@ -300,7 +331,7 @@ class STLlamaModel(LlamaModel):
             )
             hidden_states = layer_outputs[0]
             if target_gca is not None:
-                hidden_states = target_gca(hidden_states, latents)
+                hidden_states = target_gca(hidden_states, feat_kv, text_kv)
 
         hidden_states = self.norm(hidden_states)
         self._final_query_mask = final_query_mask

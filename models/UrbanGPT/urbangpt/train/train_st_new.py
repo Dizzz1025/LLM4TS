@@ -53,7 +53,8 @@ class ModelArguments:
 class DataArguments:
     data_path: str = field(default="./generated_file/Sim_prompts.json", metadata={"help": "Path to the training data (json)."})
     st_data_path: str = field(default="./Sim/train_data.npz", metadata={"help": "Path to the ODE hidden states (h) and masks."})
-
+    text_stats_path: str = field(default=None, metadata={"help": "Path to the generated statistical text JSON (e.g., Sim_text_stats.json)."})
+    
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
@@ -63,7 +64,7 @@ class TrainingArguments(transformers.TrainingArguments):
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning with temporal features."""
 
-    def __init__(self, data_path: str, st_data_path: str, tokenizer: transformers.PreTrainedTokenizer):
+    def __init__(self, data_path: str, st_data_path: str, text_stats_path: str, tokenizer: transformers.PreTrainedTokenizer):
         super(LazySupervisedDataset, self).__init__()
         logging.warning("Loading data...")
         list_data_dict = json.load(open(data_path, "r"))
@@ -72,6 +73,14 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         
+        # Load independent statistical text priors (the JSON we just generated)
+        # Expected format: {"0": "[SEG_STATS ...] ...", "1": "..."}
+        if os.path.exists(text_stats_path):
+            self.text_prior_dict = json.load(open(text_stats_path, "r"))
+        else:
+            logging.error(f"Text stats file not found at {text_stats_path}")
+            self.text_prior_dict = {}
+            
         # 假设 st_data_path 是一个保存了 'h', 'mask', 'gt' 的 .pt 或 .pkl 文件
         # 也可以根据你的实际存储格式（如每个样本一个文件）在这里修改加载逻辑
         st_npz = np.load(st_data_path, allow_pickle=True)
@@ -98,6 +107,19 @@ class LazySupervisedDataset(Dataset):
             truncation=True,
         ).input_ids[0]
 
+        # 2. Path Delta_text: Statistical Prior (Secondary Source)
+        # Get the [SEG_STATS] string we generated for this ID
+        stat_text = self.text_prior_dict.get(sample_id, "[SEG_STATS] no_prior_available [/SEG_STATS]")
+        
+        # Tokenize the statistical text independently
+        stat_input_ids = self.tokenizer(
+            stat_text,
+            return_tensors="pt",
+            padding="longest",
+            max_length=self.tokenizer.model_max_length, # Statistical text can be long, adjust as needed
+            truncation=True,
+        ).input_ids[0]
+        
         # 2. 获取对应的时间序列特征
         # h: [T, D], mask: [T], gt: [T]
         h_val = self.h_dict[sample_id]
@@ -111,6 +133,7 @@ class LazySupervisedDataset(Dataset):
 
         return dict(
             input_ids=input_ids,
+            stat_input_ids=stat_input_ids,
             h=h,
             mask_obs=mask,
             gt=gt
@@ -124,6 +147,7 @@ class DataCollatorForSTLlama(object):
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids = [instance['input_ids'] for instance in instances]
+        stat_input_ids = [instance['stat_input_ids'] for instance in instances] # 新增
         h = [instance['h'] for instance in instances]
         mask_obs = [instance['mask_obs'] for instance in instances]
         gt = [instance['gt'] for instance in instances]
@@ -131,6 +155,11 @@ class DataCollatorForSTLlama(object):
         # 对文本 ID 进行 Padding
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
+        )
+        # 3. 对统计先验 stat_input_ids 进行 Padding [B, L_stat]
+        # 动态补齐到当前 Batch 的最大长度，节省显存
+        stat_input_ids = torch.nn.utils.rnn.pad_sequence(
+            stat_input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
         )
         # 显式生成 position_ids [batch, seq_len]
         batch_size, seq_len = input_ids.shape
@@ -146,10 +175,12 @@ class DataCollatorForSTLlama(object):
         batch = dict(
             input_ids=input_ids,
             position_ids=position_ids,
+            stat_input_ids=stat_input_ids,
             h=h,
             mask_obs=mask_obs,
             gt=gt,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            stat_attention_mask=stat_input_ids.ne(self.tokenizer.pad_token_id),
         )
 
         return batch
@@ -160,7 +191,8 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     train_dataset = LazySupervisedDataset(
         tokenizer=tokenizer,
         data_path=data_args.data_path,
-        st_data_path=data_args.st_data_path
+        st_data_path=data_args.st_data_path,
+        text_stats_path=data_args.text_stats_path
     )
     data_collator = DataCollatorForSTLlama(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)

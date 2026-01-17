@@ -416,12 +416,12 @@ class NNFOwithBayesianJumps(torch.nn.Module):
             torch.nn.Dropout(p=dropout_rate),
             torch.nn.Linear(p_hidden, 2 * input_size, bias=bias),
         )
-        self.p_model1 = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, p_hidden, bias=bias),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=dropout_rate),
-            torch.nn.Linear(p_hidden, input_size, bias=bias),
-        )
+        # self.p_model1 = torch.nn.Sequential(
+        #     torch.nn.Linear(hidden_size, p_hidden, bias=bias),
+        #     torch.nn.ReLU(),
+        #     torch.nn.Dropout(p=dropout_rate),
+        #     torch.nn.Linear(p_hidden, input_size, bias=bias),
+        # )
         self.classification_model = torch.nn.Sequential(
             torch.nn.Linear(hidden_size,classification_hidden,bias=bias),
             torch.nn.ReLU(),
@@ -667,7 +667,15 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                 if return_path:
                     path_t.append(obs_time)
                     path_p.append(p)
-                    path_h.append(h) # len = 61, path_h[0].shape=[500, 50], T,B,H        
+                    path_h.append(h) # len = 61, path_h[0].shape=[500, 50], T,B,H
+            current_time = obs_time
+            # 预防times里的时间戳没到T
+            while current_time < T - 1:
+                h, p, current_time, eval_times, eval_ps = self.ode_step(h, p, delta_t, current_time)
+                if return_path:
+                    path_t.append(current_time)
+                    path_p.append(p)
+                    path_h.append(h)      
             latent_seq = torch.stack(path_h, dim=1)  # [B, L, H]
             pred = self.forecast_head(latent_seq)  # [B, T_pred, H]
             pred_seq = pred.permute(1, 0, 2) # [T_pred, B, H]
