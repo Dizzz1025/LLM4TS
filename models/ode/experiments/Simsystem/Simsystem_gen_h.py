@@ -274,7 +274,7 @@ if __name__ =="__main__":
                                             cov_size = params_dict["cov_size"], cov_hidden = params_dict["cov_hidden"],
                                             dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], 
                                             impute = params_dict["impute"], dataset='Sim').to(device)
-    state_dict = torch.load('../trained_models/Simsystem_v17_charged/Simsystem_v17_charged_MAX.pt', map_location=device)
+    state_dict = torch.load('../trained_models/Simsystem_v17_merged_DDP/Simsystem_v17_merged_DDP_MAX.pt', map_location=device)
     model.load_state_dict(state_dict)
     
     test_loglik, test_mse, num_obs, h_cache = test_evaluation(model, params_dict, class_criterion, device, dl_test)
