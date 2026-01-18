@@ -63,8 +63,8 @@ def generate_json(output_path, mode="train", system_type=None, num_samples_per_s
 
 if __name__ == "__main__":
     # --- 1. 生成训练集 (混合模式) ---
-    generate_json("generated_file/train/Sim_train_prompts.json", mode="train", num_samples_per_sys=100000)
+    # generate_json("generated_file/train/Sim_train_prompts.json", mode="train", num_samples_per_sys=100000)
 
     # --- 2. 生成测试集 (单一模式，按需修改) ---
-    # generate_json("generated_file/test/Springs_test_prompts.json", mode="test", system_type="springs", num_samples_per_sys=25000)
-    # generate_json("generated_file/test/Charged_test_prompts.json", mode="test", system_type="charged", num_samples_per_sys=25000)
+    generate_json("generated_file/test/Springs_test_prompts.json", mode="test", system_type="springs", num_samples_per_sys=25000)
+    generate_json("generated_file/test/Charged_test_prompts.json", mode="test", system_type="charged", num_samples_per_sys=25000)

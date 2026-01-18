@@ -170,13 +170,17 @@ class STLlamaModel(LlamaModel):
         # 1. Temporal Encoding: h -> Resampler -> Latents
         # ------------------------------------------------------------------
         # Path A: Feature Prior (Delta_feat)
+        T_max = mask_obs.shape[1] # 120
+        idx = torch.arange(0, T_max, device=h.device).float()
+        t_query = idx / (T_max - 1)   # 归一化
+        t_input = t_query.unsqueeze(0)
         if h is not None:
             # h: [Batch, Seq, Hidden]
             # Output: [Batch, Num_Latents, Hidden]
             h = h.to(target_dtype)
             # h = self.st_norm(h.float()).to(target_dtype)
             h_projected = self.st_projector(h)
-            feat_kv, center_times = self.feat_resampler(h_projected)
+            feat_kv, center_times = self.feat_resampler(h_projected, t_input)
         else:
             raise ValueError("Input 'h' (ODE hidden variables) is required.")
         
@@ -194,7 +198,7 @@ class STLlamaModel(LlamaModel):
             # 使用 LLM 自带的 Embedding 层将统计文本 ID 转换为向量
             stat_embeds = self.embed_tokens(stat_input_ids).to(target_dtype)
             # 通过第二个 Resampler 压缩
-            text_kv = self.text_resampler(stat_embeds) # [B, Text_Latents, D]
+            text_kv, _ = self.text_resampler(stat_embeds) # [B, Text_Latents, D]
             
         # ------------------------------------------------------------------
         # 2. Construct Prompt: [Text Prompt] + [Query Slots]
@@ -223,7 +227,7 @@ class STLlamaModel(LlamaModel):
             
             # 归一化时间步 (0~1)
             # 假设 mask_obs 的长度代表最大时间步 T_max
-            T_max = mask_obs.shape[1]
+            # T_max = mask_obs.shape[1]
             norm_time = obs_indices / (T_max - 1 + 1e-6)
             
             # 生成 Query Slot Embeddings
@@ -341,6 +345,24 @@ class STLlamaModel(LlamaModel):
             past_key_values=None 
         )
 
+    def get_monitor_stats(self):
+        # 记录全局时间缩放系数（通常这个不需要激活函数，直接记录数值）
+        stats = {
+            "custom_stats/time_embed_scale": self.time_embed_scale.item()
+        }
+        
+        # 遍历监控每一层 GCA 的门控值
+        for i, gca in enumerate(self.gca_layers):
+            # 1. 门控系数经过 tanh (范围在 -1 到 1)
+            # 注意：即使参数是标量，torch.tanh 也能正常处理
+            stats[f"gca_gate/layer_{i}_attn_tanh"] = torch.tanh(gca.attn_gate).item()
+            stats[f"gca_gate/layer_{i}_ff_tanh"] = torch.tanh(gca.ff_gate).item()
+            
+            # 2. lambda 系数经过 sigmoid (范围在 0 到 1)
+            if hasattr(gca, 'fusion_lambda'):
+                stats[f"gca_gate/layer_{i}_lambda_sigmoid"] = torch.sigmoid(gca.fusion_lambda).item()
+                
+        return stats
 
 class STLlamaForCausalLM(LlamaForCausalLM):
     config_class = STLlamaConfig
@@ -364,6 +386,8 @@ class STLlamaForCausalLM(LlamaForCausalLM):
     def forward(
             self,
             input_ids: torch.LongTensor = None,
+            stat_input_ids: torch.LongTensor = None,    # 确保添加这一行
+            stat_attention_mask: Optional[torch.Tensor] = None, # 确保添加这一行
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
@@ -379,6 +403,8 @@ class STLlamaForCausalLM(LlamaForCausalLM):
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            stat_input_ids=stat_input_ids,
+            stat_attention_mask=stat_attention_mask,
             inputs_embeds=inputs_embeds,
             h=h,
             mask_obs=mask_obs,

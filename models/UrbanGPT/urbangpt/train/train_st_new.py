@@ -26,13 +26,14 @@ from typing import Dict, Optional, Sequence, List
 import torch
 import transformers
 from torch.utils.data import Dataset
-from transformers import Trainer
+from transformers import Trainer, TrainerCallback
 
 from urbangpt.model import *
 
 import numpy as np
 
 import random
+import wandb
 IGNORE_INDEX = -100
 
 def setup_seed(seed):
@@ -93,7 +94,8 @@ class LazySupervisedDataset(Dataset):
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         sources = self.list_data_dict[i]
-        sample_id = sources.get('id', i)
+        sample_id = int(sources.get('id', i))
+        sample_key = str(sample_id)
         
         # 1. 获取文本 Prompt 并进行 Tokenize
         # 你的 Prompt 结构示例: "Task: Predict future state... QuerySlots: <q1> <q2>..."
@@ -109,7 +111,7 @@ class LazySupervisedDataset(Dataset):
 
         # 2. Path Delta_text: Statistical Prior (Secondary Source)
         # Get the [SEG_STATS] string we generated for this ID
-        stat_text = self.text_prior_dict.get(sample_id, "[SEG_STATS] no_prior_available [/SEG_STATS]")
+        stat_text = self.text_prior_dict.get(sample_key, "[SEG_STATS] no_prior_available [/SEG_STATS]")
         
         # Tokenize the statistical text independently
         stat_input_ids = self.tokenizer(
@@ -197,6 +199,31 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     data_collator = DataCollatorForSTLlama(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
 
+class CustomParamMonitorCallback(TrainerCallback):
+    def on_log(self, args, state, control, model=None, logs=None, **kwargs):
+        """
+        每当达到 logging_steps 时，该函数会被 Trainer 调用
+        """
+        # 1. 只有主进程记录日志
+        if not state.is_world_process_zero:
+            return
+            
+        # 2. 检查 model 和 logs 是否存在
+        # 在正常的 on_log 调用中，logs 是必须存在的字典
+        if model is not None and logs is not None:
+            # 处理 DDP 下的模型包裹
+            real_model = model.module if hasattr(model, "module") else model
+            # 获取你的 STLlamaModel
+            if hasattr(real_model, "model"):
+                st_model = real_model.model
+                
+                # 获取自定义指标：{"custom_stats/time_embed_scale": 0.1, ...}
+                custom_metrics = st_model.get_monitor_stats()
+                
+                # 【核心修改点】：直接将指标更新到 logs 字典中
+                # Trainer 随后会将这个更新后的 logs 字典发送给 WandB 等
+                # logs.update(custom_metrics)
+                wandb.log(custom_metrics, step=state.global_step)
 def train():
     setup_seed(42)
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
@@ -218,6 +245,10 @@ def train():
         # device_map=device_map,
         torch_dtype=(torch.bfloat16 if training_args.bf16 else torch.float32)
     )
+    
+    model.generation_config.do_sample = False
+    model.generation_config.temperature = None
+    model.generation_config.top_p = None
 
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -238,20 +269,24 @@ def train():
     
     # 确保 Resampler, TimeEmbedding, GCA, PredictHead 是可训练的
     model.model.st_projector.requires_grad_(True)
-    model.model.resampler.requires_grad_(True)
+    model.model.feat_resampler.requires_grad_(True)
+    model.model.text_resampler.requires_grad_(True)
     model.model.time_embedding.requires_grad_(True)
     model.model.gca_layers.requires_grad_(True)
     model.predict_head.requires_grad_(True)
+    model.model.time_embed_scale.requires_grad_(True)
     
     trainable = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     
+    monitor_cb = CustomParamMonitorCallback()
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        **data_module
+        **data_module,
+        callbacks=[monitor_cb]
     )
 
     # 7. 训练过程

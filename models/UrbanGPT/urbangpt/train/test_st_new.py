@@ -2,144 +2,135 @@ import os
 import sys
 import torch
 import numpy as np
+import json
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer
-from torch.nn import MSELoss
 
 # 1. 环境路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# 假设脚本位于 project_root/scripts/test 目录下，根据实际情况调整
 project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-print('Project Root:', project_root)
-
 # 导入自定义模型组件
 from urbangpt.model.STLlama_new import STLlamaForCausalLM, STLlamaConfig
 
-def test_inference(model_path, st_data_path, device="cuda"):
+def test_inference(model_path, st_data_path, data_path, text_stats_path, device="cuda"):
     """
-    全量推理测试脚本：利用模型内部的 2D 转 4D 掩码逻辑，简化外部调用。
+    双路推理测试脚本：支持动态文本 Prompt 和统计先验输入。
     """
     model_path = os.path.abspath(model_path)
     st_data_path = os.path.abspath(st_data_path)
 
     print(f"Loading model from {model_path}...")
-    config = STLlamaConfig.from_pretrained(model_path, local_files_only=True)
-    model = STLlamaForCausalLM.from_pretrained(model_path, config=config, local_files_only=True)
+    config = STLlamaConfig.from_pretrained(model_path)
+    model = STLlamaForCausalLM.from_pretrained(model_path, config=config)
     model.to(device)
     model.eval()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.unk_token
 
-    # 2. 加载 NPZ 数据
-    print(f"Loading test data from {st_data_path}...")
+    # 2. 加载全量数据
+    print("Loading test data and prompts...")
     st_npz = np.load(st_data_path, allow_pickle=True)
+    h_all, mask_all, gt_all = st_npz['h'], st_npz['mask'], st_npz['gt']
     
-    h_all = st_npz['h']
-    mask_all = st_npz['mask']
-    gt_all = st_npz['gt']
-    
-    num_samples = h_all.shape[0]
-    print(f"Detected {num_samples} samples.")
+    with open(data_path, "r") as f:
+        prompts_list = json.load(f)
+    with open(text_stats_path, "r") as f:
+        text_stats_dict = json.load(f)
 
-    # 准备文本 Prompt
-    prompt = "Task: Predict the future state at the query slots. QuerySlots:"
-    inputs = tokenizer(prompt, return_tensors="pt")
-    input_ids = inputs.input_ids.to(device)
-    # 只需要传递 2D 的文本 attention_mask，模型内部会自动扩展处理 Query Slots 长度
-    text_attention_mask = inputs.attention_mask.to(device)
-    
-    all_preds = []
-    all_gts = []
-    
+    num_samples = len(prompts_list)
+    all_preds, all_gts = [], []
+
     # 3. 循环推理
-    print("Starting Inference...")
+    print(f"Starting Dual-Path Inference on {num_samples} samples...")
     with torch.no_grad():
         for i in range(num_samples):
-            # 准备当前样本的时空输入
+            # 获取 ID 匹配索引
+            sample_data = prompts_list[i]
+            sample_id = int(sample_data.get('id', i))
+            sample_key = str(sample_id)
+
+            # 准备数值输入
             h = torch.from_numpy(h_all[i]).float().unsqueeze(0).to(device)
             mask_obs = torch.from_numpy(mask_all[i]).float().unsqueeze(0).to(device)
             gt = torch.from_numpy(gt_all[i]).float().unsqueeze(0).to(device)
 
-            # 调用模型：直接利用 STLlamaForCausalLM 的 forward 逻辑
-            # 它会自动处理 internal_attention_mask 和预测头提取
+            # 准备双路文本输入
+            # Path 1: 主 Instruction
+            instruction = sample_data['conversations'][0]['value']
+            inputs = tokenizer(instruction, return_tensors="pt").to(device)
+            
+            # Path 2: 统计先验 (Stat Input)
+            stat_text = text_stats_dict.get(sample_key, "[SEG_STATS] no_prior [/SEG_STATS]")
+            stat_inputs = tokenizer(stat_text, return_tensors="pt", truncation=True).to(device)
+
+            # 调用模型
             outputs = model(
-                input_ids=input_ids,
-                attention_mask=text_attention_mask,
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                stat_input_ids=stat_inputs.input_ids,
+                stat_attention_mask=stat_inputs.attention_mask,
                 h=h,
                 mask_obs=mask_obs,
                 return_dict=True,
             )
             
-            hidden_states = outputs.hidden_states[0]
-            # 模型内部会将 final_query_mask 存放在 past_key_values 中返回
+            # 提取隐状态 (最后一层)
+            hidden_states = outputs.hidden_states[-1] 
+            
+            # 使用模型内部生成的变长掩码提取预测点
             final_query_mask = model.model._final_query_mask.bool()
-            final_query_mask[:, -24] = False
-            # 使用掩码提取预测值
             preds = model.predict_head(hidden_states[final_query_mask]) 
-            # 对齐真值：对应后 60 步的观测点
+
+            # 对齐真值：对应 61 步之后的观测点
             query_mask_2d = torch.zeros_like(mask_obs)
             query_mask_2d[:, 61:] = mask_obs[:, 61:]
             query_mask_2d = query_mask_2d.bool()
             gt_aligned = gt[query_mask_2d]
 
-            all_preds.append(preds.cpu())
-            all_gts.append(gt_aligned.cpu())
+            # 处理变长：记录预测点和真值点
+            min_len = min(preds.shape[0], gt_aligned.shape[0])
+            all_preds.append(preds[:min_len].cpu())
+            all_gts.append(gt_aligned[:min_len].cpu())
             
             if (i + 1) % 100 == 0:
                 print(f"Processed {i + 1}/{num_samples}...")
 
-    # 4. 指标计算
-    all_preds = torch.cat(all_preds, dim=0) # [11500, 2]
-    all_gts = torch.cat(all_gts, dim=0) # [11500, 2]
-    print('all_preds.shape:', all_preds.shape)
-    print('all_gts.shape:', all_gts.shape)
+    # 4. 指标计算 (MSE & MAE)
+    # 将所有样本的预测点拼接成大张量进行全局计算
+    all_preds_cat = torch.cat(all_preds, dim=0) 
+    all_gts_cat = torch.cat(all_gts, dim=0)
     
-    mse = torch.nn.functional.mse_loss(all_preds, all_gts).item()
-    mae = torch.nn.functional.l1_loss(all_preds, all_gts).item()
-    sq = (all_preds - all_gts) ** 2
-    num = sq.numel()          # 除以的元素个数 = N*D
-    # mse_my = (sq.sum() / num).item()
+    mse = torch.nn.functional.mse_loss(all_preds_cat, all_gts_cat).item()
+    mae = torch.nn.functional.l1_loss(all_preds_cat, all_gts_cat).item()
+
     print("\n" + "="*30)
-    print(f"Overall Test Results:")
-    print(f"Total Prediction Points: {all_preds.shape[0]}")
-    print("num elements:", num)
-    print(f"Overall MSE: {mse:.4f}")
-    print(f"Overall MAE: {mae:.4f}")
+    print(f"Dual-Path Test Results:")
+    print(f"Total Prediction Points: {all_preds_cat.shape[0]}")
+    print(f"Overall MSE: {mse:.6e}") # 使用科学计数法
+    print(f"Overall MAE: {mae:.6e}")
     print("="*30)
-    preds_np = all_preds.detach().cpu().numpy()
-    gts_np   = all_gts.detach().cpu().numpy()
-    np.savez("preds_gts.npz", preds=preds_np, gts=gts_np)
-    print("saved to preds_gts.npz")
+
+    # 保存结果
+    np.savez("preds_gts_dual.npz", preds=all_preds_cat.numpy(), gts=all_gts_cat.numpy())
     
-    # 5. 可视化检查 (展示最后一个样本的部分序列)
+    # 5. 可视化最后一个样本
     plt.figure(figsize=(10, 5))
-    draw_len = min(48, len(preds)) # 绘制前 48 个预测点
-    
-    # 假设数据是多维的，我们只绘制第一个维度 [:, 0]
-    plt.plot(all_gts[:draw_len, 0], all_gts[:draw_len, 1], label='Ground Truth', color='blue', marker='o', markersize=4)
-    plt.plot(all_preds[:draw_len, 0], all_preds[:draw_len, 1], label='Prediction', color='red', linestyle='--', marker='x', markersize=4)
-    
-    plt.title(f"Inference Visual Check (MSE: {mse:.4f})")
-    plt.xlabel("Time Step")
-    plt.ylabel("Value")
+    draw_len = min(48, len(all_preds[-1]))
+    plt.plot(all_gts[-1][:draw_len, 0], all_gts[-1][:draw_len, 1], label='GT', color='blue', marker='o')
+    plt.plot(all_preds[-1][:draw_len, 0], all_preds[-1][:draw_len, 1], label='Pred', color='red', linestyle='--', marker='x')
     plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    save_path = "test_mse_charged_visual1.png"
-    plt.savefig(save_path)
-    print(f"Visual check plot saved to: {save_path}")
+    plt.title(f"Dual-Path Check (MSE: {mse:.6e})")
+    plt.savefig("test_dual_visual.png")
 
 if __name__ == "__main__":
-    # 根据你的环境修改路径
-    MODEL_PATH = f"{project_root}/checkpoints/UrbanGPT_confirm/checkpoint-v1-50epoch"
-    DATA_PATH = f"{project_root}/data/Sim/charged/test/test_data.npz"
+    MODEL_PATH = f"{project_root}/checkpoints/UrbanGPT_v4/checkpoint-500"
+    ST_DATA_PATH = f"{project_root}/data/Sim/test/h_mask_gt_charged_test.npz"
+    DATA_PATH = f"{project_root}/data/Sim/test/Springs_test_prompts.json"
+    TEXT_STATS_PATH = f"{project_root}/data/Sim/test/Simsystem_text_stats_charged.json"
     
-    if os.path.exists(MODEL_PATH) and os.path.exists(DATA_PATH):
-        test_inference(MODEL_PATH, DATA_PATH)
-    else:
-        print(f"Error: Path not found. \nModel: {MODEL_PATH}\nData: {DATA_PATH}")
+    test_inference(MODEL_PATH, ST_DATA_PATH, DATA_PATH, TEXT_STATS_PATH)
