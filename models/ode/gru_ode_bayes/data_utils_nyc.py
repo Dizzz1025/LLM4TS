@@ -90,6 +90,8 @@ class ODE_Dataset(Dataset):
                 assert self.cov_df.columns[0]=="ID"
         if A_file is not None:
             self.A_all = np.load(A_file)
+        else: 
+            self.A_all = None
         adj_dict = {
             1: np.load("/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCtaxi/data_accu/train/adjacency_matrix_80x80.npy"),
             2: np.load("/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCbike/data_accu/train/adjacency_matrix_80x80.npy"),
@@ -204,8 +206,12 @@ class ODE_Dataset(Dataset):
         # A = self.A_all
         subset = self.df.loc[idx]
         assert subset["group_ID"].iloc[0] == self.id2group[idx]
-        ds_id = int(subset["dataset_id"].iloc[0])
-        A = self.adj_dict[ds_id]
+        if self.A_all is not None:
+            print('A_all is not None!')
+            A = self.A_all
+        else:
+            ds_id = int(subset["dataset_id"].iloc[0])
+            A = self.adj_dict[ds_id]
         if len(subset.shape)==1: #Don't ask me anything about this.
             subset = self.df.loc[[idx]]
         group_id = int(subset["group_ID"].iloc[0])  # 同一ID下应恒定
@@ -392,6 +398,33 @@ def custom_collate_fn(batch):
 # (2)每个事件的观测值（X/M/interval）
 # (3)每个事件来自哪个样本（obs_idx）
 # 用于让 GRU-ODE 在全局时间轴上执行 ODE 演化 + GRU 更新。
+def build_mask_and_gt(self, T=120, delta_t=1.0):
+    """
+    为每条序列(ID)生成:
+    - mask: [num_seq, L_resample]，某时刻有观测则为1
+    - gt:   [num_seq, L_resample, variable_num]，在观测时刻填Value
+    """
+
+    num_seq = self.length                  # unique ID 数
+    variable_num = self.variable_num       # 有多少 Value_k
+    mask = np.zeros((num_seq, T), dtype=np.float32)
+    gt   = np.zeros((num_seq, T, variable_num), dtype=np.float32)
+
+    # 按 ID 分组（df 已经 set_index("ID")）
+    grouped = self.df.groupby(level=0)
+
+    for seq_id, df_seq in grouped:
+        times = df_seq["Time"].values                      # [num_obs]
+        values = df_seq.filter(regex="^Value").values      # [num_obs, variable_num]
+
+        for i, t in enumerate(times):
+            t_idx = int(round(float(t) / float(delta_t)))
+
+            if 0 <= t_idx < T:
+                mask[seq_id, t_idx] = 1.0
+                gt[seq_id, t_idx, :] = values[i]
+
+    return mask, gt
 def adj_to_edge_index(A):
     """
     A: [N, N] adjacency matrix (numpy or torch)

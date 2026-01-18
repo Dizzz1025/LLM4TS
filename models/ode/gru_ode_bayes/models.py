@@ -416,12 +416,12 @@ class NNFOwithBayesianJumps(torch.nn.Module):
             torch.nn.Dropout(p=dropout_rate),
             torch.nn.Linear(p_hidden, 2 * input_size, bias=bias),
         )
-        self.p_model1 = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, p_hidden, bias=bias),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=dropout_rate),
-            torch.nn.Linear(p_hidden, input_size, bias=bias),
-        )
+        # self.p_model1 = torch.nn.Sequential(
+        #     torch.nn.Linear(hidden_size, p_hidden, bias=bias),
+        #     torch.nn.ReLU(),
+        #     torch.nn.Dropout(p=dropout_rate),
+        #     torch.nn.Linear(p_hidden, input_size, bias=bias),
+        # )
         self.classification_model = torch.nn.Sequential(
             torch.nn.Linear(hidden_size,classification_hidden,bias=bias),
             torch.nn.ReLU(),
