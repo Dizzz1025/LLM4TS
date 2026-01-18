@@ -212,13 +212,13 @@ if __name__ =="__main__":
 
     # train_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/train_idx.npy",allow_pickle=True)
     # val_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/val_idx.npy",allow_pickle=True)
-    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_charged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
+    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_gen_h_merged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
     
     
     #Model parameters.
     params_dict=dict()
 
-    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_charged/test/Simsystem_binned_norm.csv"
+    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_merged/test/Simsystem_norm.csv"
     params_dict["A_file"] = "../../preproc/Simsystem/data_charged/test/edges_test_charged5.npy"  
     params_dict["csv_file_tags"] = None
     params_dict["csv_file_cov"]  = None
@@ -272,7 +272,7 @@ if __name__ =="__main__":
                                             cov_size = params_dict["cov_size"], cov_hidden = params_dict["cov_hidden"],
                                             dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], 
                                             impute = params_dict["impute"], dataset='Sim').to(device)
-    state_dict = torch.load('../trained_models/Simsystem_v17_charged/Simsystem_v17_charged_MAX.pt', map_location=device)
+    state_dict = torch.load('../trained_models/Simsystem_v17_merged_DDP/Simsystem_v17_merged_DDP_MAX.pt', map_location=device)
     model.load_state_dict(state_dict)
     
     test_loglik, test_mse, num_obs, h_cache = test_evaluation(model, params_dict, class_criterion, device, dl_test)

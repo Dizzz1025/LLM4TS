@@ -1,44 +1,70 @@
 import json
 import os
 
-def generate_training_json(output_path, num_samples=100000):
+def generate_json(output_path, mode="train", system_type=None, num_samples_per_sys=100000):
     """
-    生成匹配 train_st_new.py 的 JSON 数据文件。
+    生成匹配 STLlama 训练/测试需求的 JSON 文件。
     
     Args:
-        output_path: 输出 json 的路径 (例如 'data/train_data.json')
-        num_samples: 样本数量，应与你的 .pt 文件中的样本数一致
+        output_path: 输出文件路径
+        mode: "train" 或 "test"
+        system_type: 仅在 mode="test" 时有效，可选 "springs" 或 "charged"
+        num_samples_per_sys: 每个系统类别的样本数
     """
+    
+    # 定义 Prompt 模板
+    prompts = {
+        "springs": (
+            "Task: Predict future 2D positions (x, y) of particles at the query slots. "
+            "System: 2D spring-coupled particle system. "
+            "QuerySlots:"
+        ),
+        "charged": (
+            "Task: Predict future 2D positions (x, y) of particles at the query slots. "
+            "System: 2D interacting particle system with pairwise forces. "
+            "QuerySlots:"
+        )
+    }
+
     data_list = []
-    
-    # 这里的 Prompt 可以根据你的任务需求进行修改
-    # 注意：模型现在会自动处理后 60 步的预测，Prompt 只需要描述任务即可
-    prompt_template = (
-        "Task: Predict the future state at the query slots. "
-        "QuerySlots:"
-    )
 
-    for i in range(num_samples):
-        sample = {
-            "id": i,  # 这个 ID 必须能对应到 st_features.pt 中的 key
-            "conversations": [
-                {
-                    "from": "human",
-                    "value": prompt_template
-                }
-            ]
-        }
-        data_list.append(sample)
+    if mode == "train":
+        print(f"正在生成训练集：前 {num_samples_per_sys} 条为 Springs，后 {num_samples_per_sys} 条为 Charged...")
+        # 前 100,000 条: Springs
+        for i in range(num_samples_per_sys):
+            data_list.append({
+                "id": i,
+                "conversations": [{"from": "human", "value": prompts["springs"]}]
+            })
+        # 后 100,000 条: Charged
+        for i in range(num_samples_per_sys, 2 * num_samples_per_sys):
+            data_list.append({
+                "id": i,
+                "conversations": [{"from": "human", "value": prompts["charged"]}]
+            })
 
-    # 确保目录存在
+    elif mode == "test":
+        if system_type not in prompts:
+            raise ValueError("测试模式下必须指定 system_type 为 'springs' 或 'charged'")
+        
+        print(f"正在生成测试集：系统类型为 {system_type}，样本数 {num_samples_per_sys}...")
+        for i in range(num_samples_per_sys):
+            data_list.append({
+                "id": i,
+                "conversations": [{"from": "human", "value": prompts[system_type]}]
+            })
+
+    # 写入文件
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(data_list, f, indent=2, ensure_ascii=False)
     
-    print(f"成功生成 JSON 文件: {output_path}")
-    print(f"总计样本数: {len(data_list)}")
+    print(f"成功导出至: {output_path} | 总样本数: {len(data_list)}")
 
 if __name__ == "__main__":
-    # 修改为你希望保存的路径
-    generate_training_json("generated_file/test/Sim_prompts.json", num_samples=25000)
+    # --- 1. 生成训练集 (混合模式) ---
+    generate_json("generated_file/train/Sim_train_prompts.json", mode="train", num_samples_per_sys=100000)
+
+    # --- 2. 生成测试集 (单一模式，按需修改) ---
+    # generate_json("generated_file/test/Springs_test_prompts.json", mode="test", system_type="springs", num_samples_per_sys=25000)
+    # generate_json("generated_file/test/Charged_test_prompts.json", mode="test", system_type="charged", num_samples_per_sys=25000)
