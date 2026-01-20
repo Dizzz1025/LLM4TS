@@ -779,19 +779,20 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                 if return_path:
                     path_t.append(current_time)
                     path_p.append(p)
-                    path_h.append(h)        
+                    path_h.append(h)      
             latent_seq = torch.stack(path_h, dim=1)  # [B, L, H]
             pred = self.forecast_head(latent_seq)  # [B, T_pred, H]
             pred_seq = pred.permute(1, 0, 2) # [T_pred, B, H]
             # path_h = []
             path_t = []
             path_p = []
-            forecasting_idx = len(times)
-            t0 = forecasting_idx * delta_t
-            path_h = path_h[:t0]
+            # forecasting_idx = len(times)
+            # t0 = forecasting_idx * delta_t
+            # print('t0:', t0)
+            path_h = path_h[:T_val+1]
             for t in range(pred_seq.shape[0]):
                 path_h.append(pred_seq[t])    # 每个是 [B, H]
-                path_t.append(t0 + delta_t * t)
+                path_t.append(T_val + delta_t * t)
                 p_pred = self.p_model(pred_seq[t])
                 path_p.append(p_pred)
 

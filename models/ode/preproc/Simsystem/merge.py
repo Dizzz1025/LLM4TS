@@ -8,7 +8,7 @@ def merge_datasets(mode="train"):
     base_path = "/home/zhangdi24/LLM4TS/models/ode/preproc/Simsystem"
     springs_dir = f"{base_path}/data_springs/{mode}"
     charged_dir = f"{base_path}/data_charged/{mode}"
-    output_dir = f"{base_path}/data_merged/{mode}"
+    output_dir = f"{base_path}/data_merged1/{mode}"
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -33,7 +33,7 @@ def merge_datasets(mode="train"):
     # --- 3. 合并 Numpy 文件 (Edges & Features) ---
     # 定义需要合并的文件前缀（根据你截图里的文件列表）
     files_to_merge = [
-        "edges"
+        "edges","times","loc_ori","loc"
     ]
 
     for prefix in files_to_merge:
@@ -45,8 +45,8 @@ def merge_datasets(mode="train"):
         # cha_file = f"{charged_dir}/{prefix}_{mode}_springs5.npy"
 
         if os.path.exists(spr_file) and os.path.exists(cha_file):
-            data_spr = np.load(spr_file)
-            data_cha = np.load(cha_file)
+            data_spr = np.load(spr_file, allow_pickle=True)
+            data_cha = np.load(cha_file, allow_pickle=True)
             print('data_str.shape:', data_spr.shape)
             print('data_cha.shape:', data_cha.shape)
             # 在第一个维度（样本数维度）进行拼接

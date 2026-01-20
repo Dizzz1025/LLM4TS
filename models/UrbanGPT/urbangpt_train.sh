@@ -1,9 +1,9 @@
 # 1. 基础路径配置
 model_path=./checkpoints/vicuna-7b-v1.5-16k  # 确保此目录下有 config.json 和权重
 instruct_ds=./data/Sim/train/Sim_train_prompts.json      # 对应 data_path
-st_data_path=./data/Sim/train/h_mask_gt_charged_train_dup2.npz      # 对应 包含h,mask,gt
+st_data_path=./data/Sim/train/h_mask_gt_merged.npz      # 对应 包含h,mask,gt
 text_stats_ds=./data/Sim/train/Simsystem_text_stats.json       # 对应 text_stats_path (新增)
-output_model=./checkpoints/UrbanGPT_v5
+output_model=./checkpoints/Sim_v2
 
 # 离线运行 wandb
 export WANDB_MODE=offline
@@ -24,12 +24,11 @@ python urbangpt/train/train_mem.py \
     --bf16 True \
     --output_dir ${output_model} \
     --num_train_epochs 100 \
-    --per_device_train_batch_size 64 \
+    --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "no" \
-    --save_strategy "steps" \
-    --save_steps 500 \
+    --save_strategy "epoch" \
     --save_total_limit 3 \
     --learning_rate 2e-4 \
     --weight_decay 0. \

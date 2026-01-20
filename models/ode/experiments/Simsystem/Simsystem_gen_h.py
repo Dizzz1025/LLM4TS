@@ -217,8 +217,8 @@ if __name__ =="__main__":
     #Model parameters.
     params_dict=dict()
 
-    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_springs/test/Simsystem_norm.csv"
-    params_dict["A_file"] = "../../preproc/Simsystem/data_springs/test/edges_test_springs5.npy"  
+    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_charged/test/Simsystem_norm.csv"
+    params_dict["A_file"] = "../../preproc/Simsystem/data_charged/test/edges_test_charged5.npy"  
     params_dict["csv_file_tags"] = None
     params_dict["csv_file_cov"]  = None
     params_dict["hidden_size"] = 50

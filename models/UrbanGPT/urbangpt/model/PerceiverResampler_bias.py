@@ -391,7 +391,7 @@ class GatedCrossAttentionBlock(nn.Module):
         self.feat_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.text_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.attn_gate = nn.Parameter(torch.tensor([0.])) # alpha
-        self.fusion_lambda = nn.Parameter(torch.tensor(0.)) # lambda
+        self.fusion_lambda = nn.Parameter(torch.tensor(5.0)) # lambda
 
         self.ff = FeedForward(dim, mult = ff_mult)
         self.ff_gate = nn.Parameter(torch.tensor([0.]))

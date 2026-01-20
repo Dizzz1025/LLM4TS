@@ -62,7 +62,7 @@ class STLlamaConfig(LlamaConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Resampler Config
-        self.resampler_num_latents = kwargs.get("resampler_num_latents", 64)
+        self.resampler_num_latents = kwargs.get("resampler_num_latents", 5)
         self.text_resampler_num_latents = kwargs.get("text_resampler_num_latents", 5)
         self.resampler_depth = kwargs.get("resampler_depth", 2)
         self.resampler_heads = kwargs.get("resampler_heads", 8)

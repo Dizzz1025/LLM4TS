@@ -99,7 +99,7 @@ def generate_nyc_prompts_final(csv_path, taxi_poi_path, bc_poi_path, selected_re
 
 # ================= 保存与运行 =================
 
-csv_path = '/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCmerged/train/NYCmerged_irregular_region_1_80_norm.csv'
+csv_path = '/home/zhangdi24/LLM4TS/models/ode/preproc/NYC/NYCbike/data_accu/test/NYCbike_2021-12_irregular_region_1_80_norm.csv'
 taxi_poi = 'zone_poi.json'
 bc_poi = 'region_poi.json'
 npz_file = 'selected_regions.npz'

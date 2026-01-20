@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # ================== 核心配置区 ==================
-MODE = "zero-shot"              # 选项: 'supervised' 或 'zero-shot'
+MODE = "supervised"              # 选项: 'supervised' 或 'zero-shot'
 DATA_PREFIX = "NYCbike"          # 数据集前缀
 # TIME_STR = "2021-12"             # 时间标识
 # TIME_STR = "2020-01"

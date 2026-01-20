@@ -15,25 +15,20 @@ import tqdm
 from sklearn.metrics import roc_auc_score
 from gru_ode_bayes import Logger
 
-def test_evaluation(model, params_dict, class_criterion, device, dl_test):
+def test_evaluation(model, params_dict, class_criterion, device, dl_test, simulation_name):
     with torch.no_grad():
         model.eval()
-        total_loss_test = 0
-        auc_total_test = 0
         loss_test = 0
-        mse_test  = 0
-        raw_mse_test = 0
-        corr_test = 0
         num_obs = 0
-        epoch_results = []
-        epoch_results_raw_scale = []
-        epoch_sample_idx = 0
-        raw_mae0 = 0
-        raw_mae1 = 0
-        raw_mse0 = 0
-        raw_mse1 = 0
+        
+        # 用于分特征统计
+        mse_per_feature = np.zeros(2)
+        mae_per_feature = np.zeros(2)
+        num_obs_per_feature = np.zeros(2)
+        
         h_cache = []
-        # print('len(dl_test):', len(dl_test)) # 1
+        all_p_vecs_trimmed = [] # 保存预测路径的前两维
+
         for i, b in enumerate(dl_test):
             print(f"Processing test batch {i+1}/{len(dl_test)}")
             times    = b["times"]
@@ -47,178 +42,77 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test):
             edge_index = b["edge_index"].to(device)
             batch_size = labels.size(0)
 
-            if b["X_val"] is not None:
-                X_val     = b["X_val"].to(device)
-                M_val     = b["M_val"].to(device)
-                times_val = b["times_val"]
-                # print("First 10 times_val11:", times_val[:10].round(4))
-                times_idx = b["index_val"]
-                # interval_val = b['interval_val'].to(device)
-            # print('len(times_val):', len(times_val))
-            h0 = 0 #torch.zeros(labels.shape[0], params_dict["hidden_size"]).to(device)
-            hT, loss, class_pred, t_vec, p_vec, h_vec, _ , _ = model(times, time_ptr, X, M, obs_idx, delta_t=params_dict["delta_t"], T=params_dict["T"], cov=cov, return_path=True, group_idx=group_id, edge_index=edge_index, test=True)
-            total_loss = (loss + params_dict["lambda"]*class_criterion(class_pred, labels))/batch_size
-            h_vec = h_vec[:-1, :, :]
-            h_vec = h_vec.permute(1, 0, 2) #[100, 120, 50]
-            h_cache.append(h_vec.cpu().numpy())
-            # try:
-            #     auc_test=roc_auc_score(labels.cpu(),torch.sigmoid(class_pred).cpu())
-            # except ValueError:
-            #     if params_dict["verbose"]>=3:
-            #         print("Only one class. AUC is wrong")
-            #     auc_test = 0
-            #     pass
+            X_val     = b["X_val"].to(device) if b["X_val"] is not None else None
+            M_val     = b["M_val"].to(device) if b["M_val"] is not None else None
+            times_val = b["times_val"]
+            times_idx = b["index_val"]
 
-            if params_dict["lambda"]==0:
-                # t_vec = np.around(t_vec,str(params_dict["delta_t"])[::-1].find('.')).astype(np.float32) #Round floating points error in the time vector.
-                p_val = data_utils.extract_from_path(t_vec,p_vec,times_val,times_idx)
-                # print("First 10 t_vec:", t_vec[120:140])
-                # print("First 10 times_val:", times_val[:10])
-                # print("First 10 times_idx:", times_idx[:10])
-                m, v = torch.chunk(p_val,2,dim=1)
-                # m_aligned = m.clone()
+            hT, loss, class_pred, t_vec, p_vec, h_vec, _ , _ = model(
+                times, time_ptr, X, M, obs_idx, delta_t=params_dict["delta_t"], 
+                T=params_dict["T"], cov=cov, return_path=True, 
+                group_idx=group_id, edge_index=edge_index, test=True
+            )
+            
+            # 保存 h_vec (原有逻辑)
+            h_vec_trimmed = h_vec[:-1, :, :].permute(1, 0, 2)
+            h_cache.append(h_vec_trimmed.cpu().numpy())
 
-                # for sid in np.unique(times_idx):
-                #     idx = (times_idx == sid)          # 当前 sample 的所有时间点
-                #     if idx.sum() == 0:
-                #         continue
+            # --- 新增：保存 p_vec 的预测均值前两维 ---
+            # 形状 (T, B, 2)
+            p_vec_trimmed = p_vec[:, :, :2].cpu().numpy()
+            all_p_vecs_trimmed.append(p_vec_trimmed)
 
-                #     m_aligned[idx] = m[idx] - m[idx][0] + X_val[idx][0]
-
-                # m = m_aligned
-                if m.min().item() < -1 or m.max().item() > 1:
-                    print("m min/max:", m.min().item(), m.max().item())
-                last_loss = (data_utils.log_lik_gaussian(X_val,m,v)*M_val).sum()
-                mse_loss = (torch.pow(X_val-m,2)*M_val).sum()
-                # plot figure #
-                sample_id = 0
-                indices = (times_idx == sample_id)
-                # print("First 10 indices:", indices[:10])
-                # print('indices.true:', indices.sum().item())
-                m_sample = m[indices]
-                x_sample = X_val[indices]
-                # print("m.shape:", m.shape)
-                # print("X_val.shape:", X_val.shape)
-                # print("indices.sum():", indices.sum().item())
-                # print('m:', m)
-                # print("m_sample.shape:", m_sample.shape)
-                # print("x_sample.shape:", x_sample.shape)
-                # min_vals = torch.tensor([-4.999994958844029, -4.999998255850045], device=m_sample.device)
-                # max_vals = torch.tensor([4.999998542893824,4.999998728242916], device=m_sample.device)
-                # m_denorm = (m_sample + 1) * (max_vals - min_vals) / 2 + min_vals
-                # x_denorm = (x_sample + 1) * (max_vals - min_vals) / 2 + min_vals
-                m_denorm = m_sample
-                x_denorm = x_sample
-                # print('m_denorm:', m_denorm[:10, :2])
-                # print('x_denorm:', x_denorm[:10, :2])
-                plt.figure(figsize=(8, 4))
-                plt.plot(x_denorm[:, 0].cpu(), x_denorm[:, 1].cpu(), label='Ground Truth', marker='o')
-                plt.scatter(x_denorm[0, 0].cpu(), x_denorm[0, 1].cpu(), color='blue', s=100, label='GT Start', zorder=5)
-                plt.plot(m_denorm[:, 0].cpu(), m_denorm[:, 1].cpu(), label='Prediction', marker='x')
-                plt.scatter(m_denorm[0, 0].cpu(), m_denorm[0, 1].cpu(), color='orange', s=100, label='Pred Start', zorder=5)
-                plt.title(f'Sample {sample_id}')
-                plt.xlabel('Time')
-                plt.ylabel('Value')
-                plt.legend()
-                plt.grid(True)
-                plt.tight_layout()
-                plt.savefig(f'sample_{sample_id}.png', dpi=300)
-                plt.close()  # ✅ 关闭图像窗口，防止显示
+            if params_dict["lambda"] == 0 and X_val is not None:
+                p_val = data_utils.extract_from_path(t_vec, p_vec, times_val, times_idx)
+                m, v = torch.chunk(p_val, 2, dim=1)
                 
-                # print('times_idx.shape:', times_idx.shape) # (480986, )
-                # print('m.shape:', m.shape) # [480986, 4]
-                # value0_mean = 0.010112594038270284
-                # value0_std = 1.4162526902604045
-                # value1_mean = -0.016848696946102172
-                # value1_std = 1.4035620100735466
-                # X_raw = torch.zeros_like(X_val)
-                # m_raw = torch.zeros_like(m)
-                # X_raw[:, 0] = (X_val[:, 0] * value0_std + value0_mean)
-                # m_raw[:, 0] = (m[:, 0] * value0_std + value0_mean)
-                # X_raw[:, 1] = (X_val[:, 1] * value1_std + value1_mean)
-                # m_raw[:, 1] = (m[:, 1] * value1_std + value1_mean)
-                # raw_mse_loss = (torch.pow(X_raw-m_raw,2)*M_val).sum()
-                # bs = X_raw.shape[0]
-                # for j in range(bs):
-                #     gt_0 = float(X_raw[j, 0].detach().cpu().numpy())
-                #     gt_1 = float(X_raw[j, 1].detach().cpu().numpy())
-                #     pred_0 = float(m_raw[j, 0].detach().cpu().numpy())
-                #     pred_1 = float(m_raw[j, 1].detach().cpu().numpy())
-                #     epoch_results_raw_scale.append({
-                #         "global_idx": epoch_sample_idx + j,  # 全局样本编号
-                #         "dim0_gt": gt_0,
-                #         "dim0_pred": pred_0,
-                #         "dim1_gt": gt_1,
-                #         "dim1_pred": pred_1,
-                #     })
-                # epoch_sample_idx += bs
-                # if len(epoch_results_raw_scale) > 0:
-                #     df_epoch = pd.DataFrame(epoch_results_raw_scale)
-                #     df_epoch.to_csv("test_predictions_raw_scale.csv", index=False)
-                bs = X_val.shape[0]
-                for j in range(bs):
-                    gt_0 = float(X_val[j, 0].detach().cpu().numpy())
-                    gt_1 = float(X_val[j, 1].detach().cpu().numpy())
-                    pred_0 = float(m[j, 0].detach().cpu().numpy())
-                    pred_1 = float(m[j, 1].detach().cpu().numpy())
-                    epoch_results.append({
-                        "global_idx": epoch_sample_idx + j,  # 全局样本编号
-                        "dim0_gt": gt_0,
-                        "dim0_pred": pred_0,
-                        "dim1_gt": gt_1,
-                        "dim1_pred": pred_1,
-                    })
-                epoch_sample_idx += bs
-                if len(epoch_results) > 0:
-                    df_epoch = pd.DataFrame(epoch_results)
-                    df_epoch.to_csv("test_predictions_scale.csv", index=False)
+                last_loss = (data_utils.log_lik_gaussian(X_val, m, v) * M_val).sum()
+                loss_test += last_loss.item()
+                num_obs += M_val.sum().item()
 
-                # err = X_raw - m_raw
-                # err2 = (err ** 2) * M_val
-                # mae = torch.abs(err) * M_val
-                loss_test += last_loss.cpu().numpy()
-                num_obs += M_val.sum().cpu().numpy()
-                mse_test += mse_loss.cpu().numpy()
-                # raw_mse_test += raw_mse_loss.cpu().numpy()
-                # raw_mse0 += err2[:, 0].sum().cpu().numpy()
-                # raw_mse1 += err2[:, 1].sum().cpu().numpy()
-                # raw_mae0 += mae[:, 0].sum().cpu().numpy()
-                # raw_mae1 += mae[:, 1].sum().cpu().numpy()
-                # corr_test += corr_test_loss.cpu().numpy()
-            else:
-                num_obs=1
+                # --- 分维度计算 MAE/MSE ---
+                for d in range(2):
+                    mask = M_val[:, d]
+                    diff = (X_val[:, d] - m[:, d]) * mask
+                    mae_per_feature[d] += torch.sum(torch.abs(diff)).item()
+                    mse_per_feature[d] += torch.sum(diff**2).item()
+                    num_obs_per_feature[d] += torch.sum(mask).item()
 
-            total_loss_test += total_loss.cpu().detach().numpy()
-            # auc_total_test += auc_test
+        # 计算最终均值
+        for d in range(2):
+            if num_obs_per_feature[d] > 0:
+                mae_per_feature[d] /= num_obs_per_feature[d]
+                mse_per_feature[d] /= num_obs_per_feature[d]
 
-        loss_test /= num_obs
-        mse_test /=  num_obs
-        # raw_mse_test /= num_obs
-        # auc_total_test /= (i+1)
-        # raw_mae0 /= (num_obs/2)
-        # raw_mae1 /= (num_obs/2)
-        # raw_mse0 /= (num_obs/2)
-        # raw_rmse0 = np.sqrt(raw_mse0)
-        # raw_mse1 /= (num_obs/2)
-        # raw_rmse1 = np.sqrt(raw_mse1)
         h_cache = np.concatenate(h_cache, axis=0)
-        return loss_test, mse_test, num_obs, h_cache
+        
+        # --- 稳妥保存 p_vec ---
+        try:
+            final_p_vecs = np.concatenate(all_p_vecs_trimmed, axis=1)
+            np.save(f"test_p_vec_{simulation_name}.npy", final_p_vecs)
+        except ValueError:
+            np.save(f"test_p_vec_{simulation_name}.npy", np.array(all_p_vecs_trimmed, dtype=object))
+
+        return (loss_test/num_obs if num_obs>0 else 0, 
+                mae_per_feature[0], mae_per_feature[1], 
+                mse_per_feature[0], mse_per_feature[1], 
+                num_obs, h_cache)
 
 if __name__ =="__main__":
 
-    simulation_name="Simsystem_v1"
+    simulation_name="charged"
     device = torch.device("cuda")
 
 
     # train_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/train_idx.npy",allow_pickle=True)
     # val_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/val_idx.npy",allow_pickle=True)
-    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_gen_h_merged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
+    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_gen_h_charged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
     
     
     #Model parameters.
     params_dict=dict()
 
-    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_merged/test/Simsystem_norm.csv"
+    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_charged/test/Simsystem_norm.csv"
     params_dict["A_file"] = "../../preproc/Simsystem/data_charged/test/edges_test_charged5.npy"  
     params_dict["csv_file_tags"] = None
     params_dict["csv_file_cov"]  = None
@@ -275,5 +169,31 @@ if __name__ =="__main__":
     state_dict = torch.load('../trained_models/Simsystem_v17_merged_DDP/Simsystem_v17_merged_DDP_MAX.pt', map_location=device)
     model.load_state_dict(state_dict)
     
-    test_loglik, test_mse, num_obs, h_cache = test_evaluation(model, params_dict, class_criterion, device, dl_test)
-    print('test_loglik:', test_loglik, "test_mse:", test_mse, 'num_obs:', num_obs)
+# 调用评估函数
+    loglik, mae0, mae1, mse0, mse1, num_obs, h_cache = test_evaluation(
+        model, params_dict, class_criterion, device, dl_test, simulation_name
+    )
+
+    # 按照要求的顺序打印
+    print("\n" + "="*40)
+    print(f"TEST EVALUATION: {simulation_name}")
+    print("="*40)
+    print(f"Log-Likelihood: {loglik:.6f}")
+    print(f"Total Observations: {num_obs}")
+    print("-" * 40)
+
+    # 先打印 Dim 0 的 MAE 和 MSE
+    print(f"[Variable: Dim 0]")
+    print(f"  MAE: {mae0:.4f}")
+    print(f"  MSE: {mse0:.4f}")
+    print("-" * 40)
+
+    # 再打印 Dim 1 的 MAE 和 MSE
+    print(f"[Variable: Dim 1]")
+    print(f"  MAE: {mae1:.4f}")
+    print(f"  MSE: {mse1:.4f}")
+    print("-" * 40)
+    
+    # 原有的 h_cache 打印或后续处理
+    print(f"h_cache shape: {h_cache.shape}")
+    print("="*40)
