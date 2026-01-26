@@ -391,7 +391,7 @@ class GatedCrossAttentionBlock(nn.Module):
         self.feat_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.text_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.attn_gate = nn.Parameter(torch.tensor([0.])) # alpha
-        self.fusion_lambda = nn.Parameter(torch.tensor(5.0)) # lambda
+        self.fusion_lambda = nn.Parameter(torch.tensor(0.0)) # lambda
 
         self.ff = FeedForward(dim, mult = ff_mult)
         self.ff_gate = nn.Parameter(torch.tensor([0.]))
@@ -411,9 +411,19 @@ class GatedCrossAttentionBlock(nn.Module):
         l = torch.sigmoid(self.fusion_lambda)
         combined_delta = l * d_feat + (1 - l) * d_text
 
+        with torch.no_grad():
+            delta_norm = torch.norm(combined_delta * self.attn_gate.tanh(), p=2)
+            x_norm = torch.norm(x, p=2)
+            self.attn_ratio = (delta_norm / (x_norm + 1e-6)).item()
+            
         # 3. 应用门控 (alpha) 并加回到主路径: Y = Y + alpha * combined_delta
         # 注意：这里的 attn_gate.tanh() 完美承担了公式中 alpha 的角色
         x = combined_delta * self.attn_gate.tanh() + x
+        
+        with torch.no_grad():
+            delta_norm = torch.norm(self.ff(x) * self.ff_gate.tanh(), p=2)
+            x_norm = torch.norm(x, p=2)
+            self.ff_ratio = (delta_norm / (x_norm + 1e-6)).item()
 
         # 4. 这里的 FFW 同样是基于融合后的信息进行残差更新
         x = self.ff(x) * self.ff_gate.tanh() + x

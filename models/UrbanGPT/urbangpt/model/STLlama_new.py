@@ -68,7 +68,7 @@ class STLlamaConfig(LlamaConfig):
         self.resampler_heads = kwargs.get("resampler_heads", 8)
         self.resampler_dim_head = kwargs.get("resampler_dim_head", 64)
         self.st_input_dim = kwargs.get("st_input_dim", 50) # 默认输入维度，根据你的 ODE 输出修改
-        self.gca_layer_interval = kwargs.get("gca_layer_interval", 16)
+        self.gca_layer_interval = kwargs.get("gca_layer_interval", 8)
         self.target_dim = kwargs.get("target_dim", 2) # 目标预测变量的数量（例：inflow和outflow，2)
         # 默认不使用 immediate media attention 限制
         self.only_attend_immediate_media = kwargs.get("only_attend_immediate_media", False)
@@ -219,7 +219,7 @@ class STLlamaModel(LlamaModel):
         for b in range(batch_size):
             full_mask = mask_obs[b]  # [T_raw]
             pred_mask = torch.zeros_like(full_mask)
-            pred_mask[60:] = full_mask[60:]
+            pred_mask[144:] = full_mask[144:]
             prediction_mask_list.append(pred_mask)            
             # 获取观测值的时间索引
             # indices: [Num_Obs]
@@ -357,10 +357,23 @@ class STLlamaModel(LlamaModel):
             # 注意：即使参数是标量，torch.tanh 也能正常处理
             stats[f"gca_gate/layer_{i}_attn_tanh"] = torch.tanh(gca.attn_gate).item()
             stats[f"gca_gate/layer_{i}_ff_tanh"] = torch.tanh(gca.ff_gate).item()
-            
+
+            if hasattr(gca, 'attn_ratio'):
+                stats[f"gca_monitor/layer_{i}_attn_ratio"] = gca.attn_ratio
+                
+            if hasattr(gca, 'ff_ratio'):
+                stats[f"gca_monitor/layer_{i}_ff_ratio"] = gca.ff_ratio
+
             # 2. lambda 系数经过 sigmoid (范围在 0 到 1)
             if hasattr(gca, 'fusion_lambda'):
                 stats[f"gca_gate/layer_{i}_lambda_sigmoid"] = torch.sigmoid(gca.fusion_lambda).item()
+            
+            if gca.attn_gate.grad is not None:
+                stats[f"gca_grad/l{i}_attn_gate"] = gca.attn_gate.grad.item()
+            if gca.ff_gate.grad is not None:
+                stats[f"gca_grad/l{i}_ff_gate"] = gca.ff_gate.grad.item()
+            if gca.fusion_lambda.grad is not None:
+                stats[f"gca_grad/l{i}_fusion_lambda"] = gca.fusion_lambda.grad.item()
                 
         return stats
 
@@ -431,7 +444,7 @@ class STLlamaForCausalLM(LlamaForCausalLM):
             # mask_obs 和 query_mask 在逻辑上是对齐的（按顺序生成）
             # 直接使用 mask_obs 提取对应的 GT 值
             obs_mask_60 = torch.zeros_like(mask_obs)
-            obs_mask_60[:, 60:] = mask_obs[:, 60:]
+            obs_mask_60[:, 144:] = mask_obs[:, 144:]
             obs_mask_60 = obs_mask_60.bool() # gt.shape = [1, 120, 2]
             true_values = gt[obs_mask_60].to(preds.device).to(preds.dtype)
             # Calculate Loss

@@ -48,7 +48,7 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
     # 3. 循环推理
     print(f"Starting Dual-Path Inference on {num_samples} samples...")
     with torch.no_grad():
-        for i in range(num_samples):
+        for i in range(10000):
             # 获取 ID 匹配索引
             sample_data = prompts_list[i]
             sample_id = int(sample_data.get('id', i))
@@ -102,6 +102,8 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
 
     # 4. 指标计算 (MSE & MAE)
     # 将所有样本的预测点拼接成大张量进行全局计算
+    all_preds_cat = torch.cat(all_preds, dim=0)
+    all_gts_cat   = torch.cat(all_gts, dim=0)
     # --- 1. 计算总体指标 ---
     overall_mse = torch.nn.functional.mse_loss(all_preds_cat, all_gts_cat).item()
     overall_mae = torch.nn.functional.l1_loss(all_preds_cat, all_gts_cat).item()
@@ -138,16 +140,16 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
     plt.plot(all_gts[-1][:draw_len, 0], all_gts[-1][:draw_len, 1], label='GT', color='blue', marker='o')
     plt.plot(all_preds[-1][:draw_len, 0], all_preds[-1][:draw_len, 1], label='Pred', color='red', linestyle='--', marker='x')
     plt.legend()
-    plt.title(f"Dual-Path Check (MSE: {mse:.6e})")
-    plt.savefig("test_charged_visual.png")
+    plt.title(f"Dual-Path Check (MSE: {overall_mse:.6e})")
+    plt.savefig("test_springs5_visual.png")
 
 if __name__ == "__main__":
-    MODEL_PATH = f"{project_root}/checkpoints/UrbanGPT_v5/checkpoint-125000"
+    MODEL_PATH = f"{project_root}/checkpoints/Sim_v3_100_epoch_30/checkpoint-200000"
     ST_DATA_PATH = f"{project_root}/data/Sim/springs/h_mask_gt_springs.npz"
     DATA_PATH = f"{project_root}/data/Sim/springs/Springs_test_prompts.json"
     TEXT_STATS_PATH = f"{project_root}/data/Sim/springs/Simsystem_text_stats.json"
-    # MODEL_PATH = f"{project_root}/checkpoints/Sim_v2/checkpoint-93750"
-    # ST_DATA_PATH = f"{project_root}/data/Sim/charged/h_mask_gt_charged.npz"
-    # DATA_PATH = f"{project_root}/data/Sim/charged/Charged_test_prompts.json"
-    # TEXT_STATS_PATH = f"{project_root}/data/Sim/charged/Simsystem_text_stats.json"
+    # MODEL_PATH = f"{project_root}/checkpoints/Sim_v3_100/checkpoint-268750"
+    # ST_DATA_PATH = f"{project_root}/data/Sim/charged_100/h_mask_gt_charged_100.npz"
+    # DATA_PATH = f"{project_root}/data/Sim/charged_100/Charged_test_prompts.json"
+    # TEXT_STATS_PATH = f"{project_root}/data/Sim/charged_100/Simsystem_text_stats.json"
     test_inference(MODEL_PATH, ST_DATA_PATH, DATA_PATH, TEXT_STATS_PATH)

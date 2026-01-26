@@ -224,6 +224,63 @@ class CustomParamMonitorCallback(TrainerCallback):
                 # Trainer 随后会将这个更新后的 logs 字典发送给 WandB 等
                 # logs.update(custom_metrics)
                 wandb.log(custom_metrics, step=state.global_step)
+
+class STTrainer(Trainer):
+    def create_optimizer(self):
+        """
+        Setup the optimizer with special learning rates for gate parameters.
+        """
+        if self.optimizer is None:
+            # 设定你的学习率倍数
+            gate_lr = self.args.learning_rate  # 假设门控参数学习率放大10倍
+            base_lr = self.args.learning_rate
+            weight_decay = self.args.weight_decay
+
+            # 定义需要特殊对待的关键字
+            gate_keywords = ("attn_gate", "ff_gate", "fusion_lambda", "time_embed_scale")
+            
+            gate_params = []
+            base_params_with_decay = []
+            base_params_no_decay = []
+
+            for n, p in self.model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                
+                # 检查是否属于门控参数
+                if any(k in n for k in gate_keywords):
+                    gate_params.append(p)
+                    print(f"Optimizing {n} with gate_lr (no decay)")
+                # # 优化：通常 bias 和 LayerNorm 也不应该有 weight_decay
+                # elif any(nd in n for nd in ["bias", "LayerNorm.weight"]):
+                #     base_params_no_decay.append(p)
+                else:
+                    base_params_with_decay.append(p)
+
+            # 构造参数组
+            optimizer_grouped_parameters = [
+                {
+                    "params": base_params_with_decay,
+                    "weight_decay": weight_decay,
+                    "lr": base_lr,
+                },
+                {
+                    "params": base_params_no_decay,
+                    "weight_decay": 0.0,
+                    "lr": base_lr,
+                },
+                {
+                    "params": gate_params,
+                    "weight_decay": 0.0,  # 按照你的要求，关掉 weight_decay
+                    "lr": gate_lr,        # 按照你的要求，使用更大的学习率
+                },
+            ]
+
+            optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
+            self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+
+        return self.optimizer
+    
 def train():
     setup_seed(42)
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
@@ -281,7 +338,7 @@ def train():
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     
     monitor_cb = CustomParamMonitorCallback()
-    trainer = Trainer(
+    trainer = STTrainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,

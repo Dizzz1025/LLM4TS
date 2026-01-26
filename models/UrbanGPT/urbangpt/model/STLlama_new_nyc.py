@@ -68,7 +68,7 @@ class STLlamaConfig(LlamaConfig):
         self.resampler_heads = kwargs.get("resampler_heads", 8)
         self.resampler_dim_head = kwargs.get("resampler_dim_head", 64)
         self.st_input_dim = kwargs.get("st_input_dim", 50) # 默认输入维度，根据你的 ODE 输出修改
-        self.gca_layer_interval = kwargs.get("gca_layer_interval", 16)
+        self.gca_layer_interval = kwargs.get("gca_layer_interval", 8)
         self.target_dim = kwargs.get("target_dim", 2) # 目标预测变量的数量（例：inflow和outflow，2)
         # 默认不使用 immediate media attention 限制
         self.only_attend_immediate_media = kwargs.get("only_attend_immediate_media", False)

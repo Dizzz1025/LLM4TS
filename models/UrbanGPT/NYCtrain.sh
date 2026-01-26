@@ -3,7 +3,7 @@ model_path=./checkpoints/vicuna-7b-v1.5-16k  # 确保此目录下有 config.json
 instruct_ds=./data/NYC/train/NYC_train_prompts.json      # 对应 data_path
 st_data_path=./data/NYC/train/h_mask_gt_merged.npz      # 对应 包含h,mask,gt
 text_stats_ds=./data/NYC/train/NYCmerged_text_stats.json       # 对应 text_stats_path (新增)
-output_model=./checkpoints/NYC_test
+output_model=./checkpoints/NYC_v4_2e_4
 
 # 离线运行 wandb
 export WANDB_MODE=offline
@@ -24,7 +24,7 @@ python urbangpt/train/train_mem.py \
     --bf16 True \
     --output_dir ${output_model} \
     --num_train_epochs 300 \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "no" \
