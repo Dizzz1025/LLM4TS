@@ -55,6 +55,9 @@ class DataArguments:
     data_path: str = field(default="./generated_file/Sim_prompts.json", metadata={"help": "Path to the training data (json)."})
     st_data_path: str = field(default="./Sim/train_data.npz", metadata={"help": "Path to the ODE hidden states (h) and masks."})
     text_stats_path: str = field(default=None, metadata={"help": "Path to the generated statistical text JSON (e.g., Sim_text_stats.json)."})
+    data_eval_path: str = field(default="./generated_file/Sim_prompts.json", metadata={"help": "Path to the training data (json)."})
+    st_data_eval_path: str = field(default="./Sim/train_data.npz", metadata={"help": "Path to the ODE hidden states (h) and masks."})
+    text_stats_eval_path: str = field(default=None, metadata={"help": "Path to the generated statistical text JSON (e.g., Sim_text_stats.json)."})
     
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -181,6 +184,7 @@ class DataCollatorForSTLlama(object):
             h=h,
             mask_obs=mask_obs,
             gt=gt,
+            labels=gt,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
             stat_attention_mask=stat_input_ids.ne(self.tokenizer.pad_token_id),
         )
@@ -196,8 +200,20 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
         st_data_path=data_args.st_data_path,
         text_stats_path=data_args.text_stats_path
     )
+    eval_dataset = LazySupervisedDataset(
+        tokenizer=tokenizer,
+        data_path=data_args.data_eval_path, # 举例：替换路径名
+        st_data_path=data_args.st_data_eval_path,
+        text_stats_path=data_args.text_stats_eval_path
+    )
+    
+    max_eval_samples = 4000
+    if len(eval_dataset.list_data_dict) > max_eval_samples:
+        logging.warning(f"Slicing eval_dataset from {len(eval_dataset.list_data_dict)} to {max_eval_samples} samples.")
+        eval_dataset.list_data_dict = eval_dataset.list_data_dict[:max_eval_samples]
+        
     data_collator = DataCollatorForSTLlama(tokenizer=tokenizer)
-    return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
+    return dict(train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
 
 class CustomParamMonitorCallback(TrainerCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
@@ -285,7 +301,16 @@ def train():
     setup_seed(42)
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    # 在 train() 函数中，解析完 training_args 后进行如下设置：
+    training_args.evaluation_strategy = "epoch"  # 每轮训练结束后进行评估
+    training_args.save_strategy = "epoch"        # 只有评估完才考虑保存，两者需一致
+    training_args.logging_strategy = "epoch"     # 让日志也按 epoch 输出，方便对齐指标
 
+    # 保存最优模型的核心参数
+    training_args.load_best_model_at_end = True  # 训练结束自动加载指标最好的权重
+    training_args.metric_for_best_model = "eval_loss" # 这里填 eval_loss 里的 "loss"
+    training_args.greater_is_better = False      # Loss 越小越好
+    training_args.save_total_limit = 2           # 最多保留 2 个 checkpoint，节省磁盘
     local_rank = getattr(training_args, "local_rank", -1)
     # device_map = None
     # if local_rank != -1:
@@ -336,7 +361,8 @@ def train():
     trainable = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
-    
+    if data_module['eval_dataset'] is None:
+        logging.error("Evaluation dataset is missing! Evaluation strategy 'epoch' will fail.")
     monitor_cb = CustomParamMonitorCallback()
     trainer = STTrainer(
         model=model,
@@ -351,6 +377,7 @@ def train():
         trainer.train(resume_from_checkpoint=True)
     else:
         trainer.train()
+    # trainer.train()
         
     trainer.save_state()
     

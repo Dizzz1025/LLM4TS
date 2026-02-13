@@ -209,7 +209,8 @@ class GRUObservationCellLogvar(torch.nn.Module):
 
         ## log normal loss, over all observations
         log_lik_c    = np.log(np.sqrt(2*np.pi))
-        losses       = 0.5 * ((torch.pow(error, 2) + logvar + 2*log_lik_c) * M_obs)
+        # losses       = 0.5 * ((torch.pow(error, 2) + logvar + 2*log_lik_c) * M_obs)
+        losses = ((X_obs - mean)**2 * M_obs).sum() / (M_obs.sum() + 1e-8)
         if losses.sum()!=losses.sum():
             import ipdb; ipdb.set_trace()
 
@@ -254,7 +255,6 @@ class GRUObservationCell(torch.nn.Module):
 
         ## log normal loss, over all observations
         loss         = 0.5 * ((torch.pow(error, 2) + torch.log(var)) * M_obs).sum()
-
 
         ## TODO: try removing X_obs (they are included in error)
         gru_input    = torch.stack([X_obs, mean, var, error], dim=2).unsqueeze(2)
@@ -370,7 +370,7 @@ class TimeMixingDilatedStack(torch.nn.Module):
                 TimeMixingDilatedConv(
                     H,
                     kernel_size=kernel_size,
-                    dilation=2 ** i,
+                    dilation=1,
                     dropout=dropout
                 )
             )
@@ -442,6 +442,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                 self.gru_c   = GRUODECell(2 * input_size, hidden_size, bias=bias)
 
         if logvar:
+            print('choose logbar!')
             self.gru_obs = GRUObservationCellLogvar(input_size, hidden_size, prep_hidden, bias=bias)
         else:
             self.gru_obs = GRUObservationCell(input_size, hidden_size, prep_hidden, bias=bias)
@@ -479,7 +480,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
         
         self.time_proj_weight = torch.nn.Parameter(torch.randn(self.T_pred, self.L_resample))
         self.time_proj_bias = torch.nn.Parameter(torch.zeros(self.T_pred))
-        self.forecast_head = TimeMixerForecastDilatedConv(L=self.L_resample, T_pred=self.T_pred, H=hidden_size, num_layers=5, dropout=0.1)
+        self.forecast_head = TimeMixerForecastDilatedConv(L=self.L_resample, T_pred=self.T_pred, H=hidden_size, num_layers=3, dropout=0.1)
         self.stage = stage
         self.latent_cache = {}
 
@@ -852,6 +853,7 @@ def compute_KL_loss(p_obs, X_obs, M_obs, obs_noise_std=1e-2, logvar=True):
         std       = torch.pow(torch.abs(var) + 1e-5,0.5)
 
     return (gaussian_KL(mu_1 = mean, mu_2 = X_obs, sigma_1 = std, sigma_2 = obs_noise_std)*M_obs).sum()
+
 
 
 def gaussian_KL(mu_1, mu_2, sigma_1, sigma_2):

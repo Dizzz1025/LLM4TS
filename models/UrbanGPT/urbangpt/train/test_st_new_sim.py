@@ -48,7 +48,7 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
     # 3. 循环推理
     print(f"Starting Dual-Path Inference on {num_samples} samples...")
     with torch.no_grad():
-        for i in range(10000):
+        for i in range(num_samples):
             # 获取 ID 匹配索引
             sample_data = prompts_list[i]
             sample_id = int(sample_data.get('id', i))
@@ -88,6 +88,7 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
 
             # 对齐真值：对应 61 步之后的观测点
             query_mask_2d = torch.zeros_like(mask_obs)
+            # query_mask_2d[:, 61:] = mask_obs[:, 61:]
             query_mask_2d[:, 61:] = mask_obs[:, 61:]
             query_mask_2d = query_mask_2d.bool()
             gt_aligned = gt[query_mask_2d]
@@ -144,12 +145,13 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
     plt.savefig("test_springs5_visual.png")
 
 if __name__ == "__main__":
-    MODEL_PATH = f"{project_root}/checkpoints/Sim_v3_100_epoch_30/checkpoint-200000"
-    ST_DATA_PATH = f"{project_root}/data/Sim/springs/h_mask_gt_springs.npz"
-    DATA_PATH = f"{project_root}/data/Sim/springs/Springs_test_prompts.json"
-    TEXT_STATS_PATH = f"{project_root}/data/Sim/springs/Simsystem_text_stats.json"
-    # MODEL_PATH = f"{project_root}/checkpoints/Sim_v3_100/checkpoint-268750"
-    # ST_DATA_PATH = f"{project_root}/data/Sim/charged_100/h_mask_gt_charged_100.npz"
-    # DATA_PATH = f"{project_root}/data/Sim/charged_100/Charged_test_prompts.json"
-    # TEXT_STATS_PATH = f"{project_root}/data/Sim/charged_100/Simsystem_text_stats.json"
+    # MODEL_PATH = f"{project_root}/checkpoints/Sim_v4_100/checkpoint-287500"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/Sim_v5_daice/checkpoint-106250"
+    # ST_DATA_PATH = f"{project_root}/data/Sim/springs/h_mask_gt_springs.npz"
+    # DATA_PATH = f"{project_root}/data/Sim/springs/Springs_test_prompts.json"
+    # TEXT_STATS_PATH = f"{project_root}/data/Sim/springs/Simsystem_text_stats.json"
+    MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/Sim_v5_daice/checkpoint-106250"
+    ST_DATA_PATH = f"{project_root}/data/Sim/charged_100/h_mask_gt_charged_100.npz"
+    DATA_PATH = f"{project_root}/data/Sim/charged_100/Charged_test_prompts.json"
+    TEXT_STATS_PATH = f"{project_root}/data/Sim/charged_100/Simsystem_text_stats.json"
     test_inference(MODEL_PATH, ST_DATA_PATH, DATA_PATH, TEXT_STATS_PATH)

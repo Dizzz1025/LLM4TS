@@ -59,10 +59,11 @@ def masked_mse_for_test(pred, gt, mask, last_k=59):
     diff = diff * mask            # 只在 mask=1 的位置求损失
     # 避免除以0
     denom = mask.sum() * D
+    print('denom:', denom)
     return diff.sum() / denom    
 
 if __name__ == "__main__":
-    data = np.load('test_data.npz')
+    data = np.load('h_mask_gt_charged.npz')
     h_cache = data["h"]      # (N, T, H)
     mask    = data["mask"]         # (N, T)
     gt      = data["gt"]           # (N, T, variable_num)

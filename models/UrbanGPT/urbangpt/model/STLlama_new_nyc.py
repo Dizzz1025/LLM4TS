@@ -180,7 +180,7 @@ class STLlamaModel(LlamaModel):
             h = h.to(target_dtype)
             # h = self.st_norm(h.float()).to(target_dtype)
             h_projected = self.st_projector(h)
-            feat_kv, center_times = self.feat_resampler(h_projected, t_input)
+            feat_kv, center_times = self.feat_resampler(h_projected, t_input=t_input)
         else:
             raise ValueError("Input 'h' (ODE hidden variables) is required.")
         

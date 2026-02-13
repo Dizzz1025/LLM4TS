@@ -22,13 +22,15 @@ class HToGtDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.h[idx], self.mask[idx], self.gt[idx]
-def FeedForward(dim, mult = 4):
+def FeedForward(dim, mult = 4, dropout=0.1):
     inner_dim = int(dim * mult)
     return nn.Sequential(
         nn.LayerNorm(dim),
         nn.Linear(dim, inner_dim, bias = False),
         nn.GELU(),
-        nn.Linear(inner_dim, dim, bias = False)
+        # nn.Dropout(dropout), 
+        nn.Linear(inner_dim, dim, bias = False),
+        # nn.Dropout(dropout), 
     )
 
 class PerceiverAttention(nn.Module):
@@ -50,8 +52,11 @@ class PerceiverAttention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim, bias = False)
-        self.beta = nn.Parameter(torch.tensor(1.0))
-    def forward(self, x, latents, dynamics_bias=None, times=None):
+        self.beta = nn.Parameter(torch.tensor(-5.0))
+        # self.beta = nn.Parameter(torch.tensor(1.0))
+        self.attn_drop = nn.Dropout(0.1)
+        self.out_drop  = nn.Dropout(0.1)
+    def forward(self, x, latents, mask=None, dynamics_bias=None, times=None):
         """
         einstein notation
         b - batch
@@ -82,6 +87,11 @@ class PerceiverAttention(nn.Module):
         # k: [b, h, n_media, d]
         # v: [b, h, n_media, d]
         sim = einsum('... i d, ... j d  -> ... i j', q, k)
+        if mask is not None:
+            # mask shape: [b, n_media] -> [b, 1, 1, n_media]
+            mask_emb = mask[:, None, None, :]
+            # 将 mask 为 False (即 padding) 的位置设为负无穷
+            sim = sim.masked_fill(~mask_emb.bool(), -torch.finfo(sim.dtype).max)
         # #### MODIFIED: Eq (12) - Inject dynamics information ####
         if dynamics_bias is not None:
             # dynamics_bias: [b, n_media] -> broadcast to [b, 1, 1, n_media]
@@ -92,7 +102,7 @@ class PerceiverAttention(nn.Module):
         # sim: [b, h, n_latents, n_media]
         sim = sim - sim.amax(dim = -1, keepdim = True).detach()
         attn = sim.softmax(dim = -1)
-
+        # attn = self.attn_drop(attn)
         # #### MODIFIED: Eq (13) - Calculate Center Time ####
         center_times = None
         if times is not None:
@@ -105,7 +115,9 @@ class PerceiverAttention(nn.Module):
 
         out = einsum('... i j, ... j d -> ... i d', attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)', h = h)
-        return self.to_out(out), center_times
+        out = self.to_out(out)
+        # out = self.out_drop(out)
+        return out, center_times
 
 class PerceiverResampler(nn.Module):
     def __init__(
@@ -134,7 +146,7 @@ class PerceiverResampler(nn.Module):
 
         self.norm = nn.LayerNorm(dim)
 
-    def forward(self, x, t_input=None):
+    def forward(self, x, mask=None, t_input=None):
         # times = x.shape[1]
         # x = x + self.media_pos_emb[:times]
         b, t, d = x.shape
@@ -158,7 +170,7 @@ class PerceiverResampler(nn.Module):
         final_center_times = None
             
         for attn, ff in self.layers:
-            attn_out, center_times = attn(x, latents, dynamics_bias=dynamics_norm, times=t_input)
+            attn_out, center_times = attn(x, latents, mask=mask, dynamics_bias=dynamics_norm, times=t_input)
             latents = attn_out + latents
             latents = ff(latents) + latents
             
@@ -345,6 +357,8 @@ class MaskedCrossAttention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim, bias = False)
+        self.attn_drop = nn.Dropout(0.1)
+        self.out_drop  = nn.Dropout(0.1)
 
         # whether for text to only attend to immediate preceding image, or all images
 
@@ -372,10 +386,12 @@ class MaskedCrossAttention(nn.Module):
 
         sim = einsum('... i d, ... j d -> ... i j', q, k)
         attn = sim.softmax(dim = -1)
-        
+        # attn = self.attn_drop(attn)
         out = einsum('... i j, ... j d -> ... i d', attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
+        out = self.to_out(out)
+        # out = self.out_drop(out)
+        return out
 
 class GatedCrossAttentionBlock(nn.Module):
     def __init__(
@@ -391,11 +407,11 @@ class GatedCrossAttentionBlock(nn.Module):
         self.feat_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.text_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.attn_gate = nn.Parameter(torch.tensor([0.])) # alpha
+        # self.fusion_lambda = nn.Parameter(torch.tensor(0.0)) # lambda
         self.fusion_lambda = nn.Parameter(torch.tensor(0.0)) # lambda
 
         self.ff = FeedForward(dim, mult = ff_mult)
         self.ff_gate = nn.Parameter(torch.tensor([0.]))
-
     def forward(
         self,
         x,

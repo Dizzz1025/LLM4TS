@@ -326,7 +326,7 @@ def set_seed(seed=42):
 
 if __name__ =="__main__":
     set_seed(42)
-    simulation_name="nyc_taxi_v4_02"
+    simulation_name="nyc_taxi_v4_50e"
     device = torch.device("cuda")
     DATA_NAME = 'data_accu'
 
@@ -371,4 +371,4 @@ if __name__ =="__main__":
                         device = device,
                         train_idx = train_idx,
                         val_idx = val_idx,
-                        epoch_max=300)
+                        epoch_max=100)

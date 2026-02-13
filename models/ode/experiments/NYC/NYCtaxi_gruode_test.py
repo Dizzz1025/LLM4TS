@@ -96,26 +96,38 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test, simula
 
 if __name__ =="__main__":
 
+    # model_path = '../trained_models/NYC_SingleCard_Resume/NYC_SingleCard_Resume_BEST.pt'
+    model_path = "/home/zhangdi24/LLM4TS/models/ode/experiments/trained_models/NYC_v17_merged_DDP_v7/NYC_v17_merged_DDP_v7_MAX.pt"
+    # simulation_name="taxi_supervised"
     # simulation_name="taxi_zeroshot"
     # simulation_name="bike_zeroshot"
-    # simulation_name="bike_supervised"
-    simulation_name="crime_zeroshot"
+    simulation_name="bike_supervised"
+    # simulation_name="crime_supervised"
+    # simulation_name="crime_zeroshot"
     device = torch.device("cuda")
     test_idx = np.load(f"../../gru_ode_bayes/datasets/NYC/folds_gen_h_{simulation_name}/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
-    
+
     #Model parameters.
     params_dict=dict()
 
-    # params_dict["csv_file_path"] = "../../preproc/NYC/NYCtaxi/data_accu/test/NYCtaxi_2020-01_irregular_region_81_160_norm.csv"
-    # params_dict["A_file"] = "../../preproc/NYC/NYCtaxi/data_accu/test/adjacency_matrix_80x80_zero-shot.npy"
-    # params_dict["csv_file_path"] = "../../preproc/NYC/NYCbike/data_accu/test/NYCbike_2020-01_irregular_region_81_160_norm.csv"
-    # params_dict["A_file"] = "../../preproc/NYC/NYCbike/data_accu/test/adjacency_matrix_80x80_zero-shot.npy"
-    # params_dict["csv_file_path"] = "../../preproc/NYC/NYCbike/data_accu/test/NYCbike_2021-12_irregular_region_1_80_norm.csv"
-    # params_dict["A_file"] = "../../preproc/NYC/NYCbike/data_accu/test/adjacency_matrix_80x80.npy"
-    # params_dict["csv_file_path"] = "../../preproc/NYC/NYCcrime/data/test/NYCcrime_2021_irregular_region_1_80_norm.csv"
-    # params_dict["A_file"] = "../../preproc/NYC/NYCcrime/data/test/adjacency_matrix_80x80.npy"
-    params_dict["csv_file_path"] = "../../preproc/NYC/NYCcrime/data/test/NYCcrime_2020_irregular_region_81_160_norm.csv"
-    params_dict["A_file"] = "../../preproc/NYC/NYCcrime/data/test/adjacency_matrix_80x80_zero-shot.npy"
+    if simulation_name == "taxi_supervised":
+        params_dict["csv_file_path"] = "../../preproc/NYC/NYCtaxi/data_accu/test/NYCtaxi_2021-12_irregular_region_1_80_norm.csv"
+        params_dict["A_file"] = "../../preproc/NYC/NYCtaxi/data_accu/test/adjacency_matrix_80x80.npy"
+    elif simulation_name == "taxi_zeroshot":
+        params_dict["csv_file_path"] = "../../preproc/NYC/NYCtaxi/data_accu/test/NYCtaxi_2020-01_irregular_region_81_160_norm.csv"
+        params_dict["A_file"] = "../../preproc/NYC/NYCtaxi/data_accu/test/adjacency_matrix_80x80_zero-shot.npy"
+    elif simulation_name == "bike_zeroshot":
+        params_dict["csv_file_path"] = "../../preproc/NYC/NYCbike/data_accu/test/NYCbike_2020-01_irregular_region_81_160_norm.csv"
+        params_dict["A_file"] = "../../preproc/NYC/NYCbike/data_accu/test/adjacency_matrix_80x80_zero-shot.npy"
+    elif simulation_name == "bike_supervised":
+        params_dict["csv_file_path"] = "../../preproc/NYC/NYCbike/data_accu/test/NYCbike_2021-12_irregular_region_1_80_norm.csv"
+        params_dict["A_file"] = "../../preproc/NYC/NYCbike/data_accu/test/adjacency_matrix_80x80.npy"
+    elif simulation_name == "crime_supervised":
+        params_dict["csv_file_path"] = "../../preproc/NYC/NYCcrime/data/test/NYCcrime_2021_irregular_region_1_80_norm.csv"
+        params_dict["A_file"] = "../../preproc/NYC/NYCcrime/data/test/adjacency_matrix_80x80.npy"
+    elif simulation_name == "crime_zeroshot":
+        params_dict["csv_file_path"] = "../../preproc/NYC/NYCcrime/data/test/NYCcrime_2020_irregular_region_81_160_norm.csv"
+        params_dict["A_file"] = "../../preproc/NYC/NYCcrime/data/test/adjacency_matrix_80x80_zero-shot.npy"
     params_dict["csv_file_tags"] = None
     params_dict["csv_file_cov"]  = None
     params_dict["hidden_size"] = 50
@@ -130,7 +142,7 @@ if __name__ =="__main__":
     params_dict["classification_hidden"] = 2
     params_dict["cov_hidden"] = 50
     params_dict["weight_decay"] = 0.0001
-    params_dict["dropout_rate"] = 0.2
+    params_dict["dropout_rate"] = 0.1
     params_dict["lr"]=0.001
     params_dict["full_gru_ode"] = True
     params_dict["no_cov"] = True
@@ -154,7 +166,7 @@ if __name__ =="__main__":
                                         cov_file= csv_file_cov, idx=test_idx, validation = validation,
                                         val_options = val_options, A_file=A_file)
     id2group = data_test.id2group
-    test_sampler = data_utils.GroupBatchSampler(id2group=id2group, groups_per_batch=5, shuffle_groups=False, drop_last=False)
+    test_sampler = data_utils.GroupBatchSampler(id2group=id2group, groups_per_batch=2, shuffle_groups=False, drop_last=False)
     dl_test = DataLoader(dataset=data_test, collate_fn=data_utils.custom_collate_fn, batch_sampler=test_sampler)
     class_criterion = torch.nn.BCEWithLogitsLoss(reduction='sum')
     
@@ -168,7 +180,7 @@ if __name__ =="__main__":
                                             cov_size = params_dict["cov_size"], cov_hidden = params_dict["cov_hidden"],
                                             dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], 
                                             impute = params_dict["impute"], dataset='nyc').to(device)
-    state_dict = torch.load('../trained_models/NYC_v17_merged_DDP/NYC_v17_merged_DDP_MAX.pt', map_location=device)
+    state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     
     loglik, mae0, mae1, mse0, mse1, rmse0, rmse1 = test_evaluation(model, params_dict, class_criterion, device, dl_test, simulation_name)

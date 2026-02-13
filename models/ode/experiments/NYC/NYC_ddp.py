@@ -27,7 +27,7 @@ print('root_path:', root_path)
 # --- DDP 初始化与清理函数 ---
 def setup(rank, world_size, process_seed):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    os.environ['MASTER_PORT'] = '12359'
     import random
     random.seed(process_seed)
     np.random.seed(process_seed)
@@ -292,8 +292,8 @@ def train_gruode(rank, world_size, simulation_name, params_dict, full_train_idx,
 
 # --- 主启动逻辑 ---
 if __name__ == "__main__":
-    seed_value = 42
-    simulation_name = "NYC_v17_merged_DDP"
+    seed_value = 2026
+    simulation_name = "NYC_v17_merged_DDP_v7"
     
     # 获取显卡数量
     world_size = torch.cuda.device_count()
@@ -312,16 +312,20 @@ if __name__ == "__main__":
     params_dict["csv_file_cov"]  = None
 
     params_dict["hidden_size"] = 50
+    # params_dict["hidden_size"] = 100
     params_dict["p_hidden"] = 25
+    # params_dict["p_hidden"] = 50
     params_dict["prep_hidden"] = 10
     params_dict["logvar"] = True
-    params_dict["mixing"] = 1e-4 
+    params_dict["mixing"] = 0.5 
     params_dict["delta_t"] = 1
     params_dict["T"] = 216
     params_dict["lambda"] = 0 
     params_dict["classification_hidden"] = 2
     params_dict["cov_hidden"] = 50
-    params_dict["weight_decay"] = 0.0001
+    # params_dict["weight_decay"] = 0.001
+    params_dict["weight_decay"] = 0.001
+    # params_dict["dropout_rate"] = 0.1
     params_dict["dropout_rate"] = 0.2
     params_dict["lr"] = 0.001
     params_dict["full_gru_ode"] = True

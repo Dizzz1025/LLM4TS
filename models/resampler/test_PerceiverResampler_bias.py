@@ -406,11 +406,11 @@ class GatedCrossAttentionBlock(nn.Module):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ODEPerceiverPredictor(dim=50, y_dim=2, perceiver_depth=2, num_latents=5).to(device)
-    data = np.load('./Sim/charged_test_data.npz')
+    data = np.load('./h_mask_gt_charged_100.npz')
     h_cache = data["h"]      # (N, T, H)
     mask    = data["mask"]         # (N, T)
     gt      = data["gt"]           # (N, T, variable_num)
-    ckpt = torch.load("charged_projection_model_v2.pt", map_location=device)
+    ckpt = torch.load("merged_projection_model_v2.pt", map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     print("\n===== PerceiverAttention beta parameters =====")
     for i, layer in enumerate(model.perceiver.layers):

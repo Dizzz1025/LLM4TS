@@ -112,8 +112,8 @@ if __name__ =="__main__":
     #Model parameters.
     params_dict=dict()
 
-    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_charged/test/Simsystem_norm.csv"
-    params_dict["A_file"] = "../../preproc/Simsystem/data_charged/test/edges_test_charged5.npy"  
+    params_dict["csv_file_path"] = "../../preproc/Simsystem/data_springs/test/Simsystem_norm.csv"
+    params_dict["A_file"] = "../../preproc/Simsystem/data_springs/test/edges_test_springs5.npy"  
     params_dict["csv_file_tags"] = None
     params_dict["csv_file_cov"]  = None
     params_dict["hidden_size"] = 50
@@ -166,7 +166,7 @@ if __name__ =="__main__":
                                             cov_size = params_dict["cov_size"], cov_hidden = params_dict["cov_hidden"],
                                             dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], 
                                             impute = params_dict["impute"], dataset='Sim').to(device)
-    state_dict = torch.load('../trained_models/Simsystem_v17_merged_DDP/Simsystem_v17_merged_DDP_MAX.pt', map_location=device)
+    state_dict = torch.load('../trained_models/Simsystem_v17_merged_100/Simsystem_v17_merged_100_MAX_comfirm.pt', map_location=device)
     model.load_state_dict(state_dict)
     
 # 调用评估函数

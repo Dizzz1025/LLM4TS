@@ -6,7 +6,10 @@ import json
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer
 import pickle
-
+# import debugpy
+# debugpy.listen(("0.0.0.0", 5678))
+# print("Waiting for debugger attach...")
+# debugpy.wait_for_client()
 # 1. 环境路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
@@ -116,6 +119,8 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
     all_preds_cat = torch.cat(all_preds, dim=0) 
     all_gts_cat = torch.cat(all_gts, dim=0)
     
+    all_preds_final = torch.stack(all_preds, dim=0) 
+    all_gts_final = torch.stack(all_gts, dim=0)
     # 1. 计算总体指标
     mse = torch.nn.functional.mse_loss(all_preds_cat, all_gts_cat).item()
     mae = torch.nn.functional.l1_loss(all_preds_cat, all_gts_cat).item()
@@ -146,7 +151,8 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
     print("="*40)
 
     # 保存结果
-    np.savez(f"preds_gts_dual_{type}.npz", preds=all_preds_cat.numpy(), gts=all_gts_cat.numpy())
+    # np.savez(f"preds_gts_dual_{type}.npz", preds=all_preds_cat.numpy(), gts=all_gts_cat.numpy())
+    np.savez(f"new_{type}.npz", preds=all_preds_final.numpy(), gts=all_gts_final.numpy())
     
     # 5. 可视化最后一个样本
     plt.figure(figsize=(10, 5))
@@ -158,43 +164,57 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
     plt.savefig("test_dual_visual.png")
 
 if __name__ == "__main__":
-    TYPE = "taxi_supervised"    
-    MODEL_PATH = f"{project_root}/checkpoints/NYC_v4_2e_4/checkpoint-42510"
-    ST_DATA_PATH = f"{project_root}/data/NYC/taxi/h_mask_gt_taxi_supervised.npz"
-    DATA_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2021-12_irregular_region_1_80_norm_formatted.json"
-    TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2021-12_text_stats.json"
-    GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCtaxi_2021-12_gt.pkl"
+    # TYPE = "taxi_supervised"    
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
+    # ST_DATA_PATH = f"{project_root}/data/NYC/taxi/h_mask_gt_taxi_supervised.npz"
+    # DATA_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2021-12_irregular_region_1_80_norm_formatted.json"
+    # TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2021-12_text_stats.json"
+    # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCtaxi_2021-12_gt.pkl"
+    
+    TYPE = "taxi_zeroshot"
+    MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
+    ST_DATA_PATH = f"{project_root}/data/NYC/taxi/h_mask_gt_taxi_zeroshot.npz"
+    DATA_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json"
+    TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2020-01_text_stats.json"
+    GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCtaxi_2020-01_gt.pkl"
+    
+    # TYPE = "taxi_supervised"    
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
+    # ST_DATA_PATH = f"{project_root}/data/NYC/taxi/new_data/h_mask_gt_taxi_supervised.npz"
+    # DATA_PATH = f"{project_root}/data/NYC/taxi/new_data/NYCtaxi_2021-12_irregular_region_1_80_norm_formatted.json"
+    # TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/new_data/NYCtaxi_2021-12_text_stats.json"
+    # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/new_data/NYCtaxi_2021-12_gt.pkl"
     
     # TYPE = "taxi_zeroshot"
-    # MODEL_PATH = f"{project_root}/checkpoints/NYC_v3_daice/checkpoint-47415"
-    # ST_DATA_PATH = f"{project_root}/data/NYC/taxi/h_mask_gt_taxi_zeroshot.npz"
-    # DATA_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json"
-    # TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2020-01_text_stats.json"
-    # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCtaxi_2020-01_gt.pkl"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
+    # ST_DATA_PATH = f"{project_root}/data/NYC/taxi/new_data/h_mask_gt_taxi_zeroshot.npz"
+    # DATA_PATH = f"{project_root}/data/NYC/taxi/new_data/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json"
+    # TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/new_data/NYCtaxi_2020-01_text_stats.json"
+    # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/new_data/NYCtaxi_2020-01_gt.pkl"
     
     # TYPE = "bike_supervised"
-    # MODEL_PATH = f"{project_root}/checkpoints/NYC_v3_daice/checkpoint-47415"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
     # ST_DATA_PATH = f"{project_root}/data/NYC/bike/h_mask_gt_bike_supervised.npz"
     # DATA_PATH = f"{project_root}/data/NYC/bike/NYCbike_2021-12_irregular_region_1_80_norm_formatted.json"
     # TEXT_STATS_PATH = f"{project_root}/data/NYC/bike/NYCbike_2021-12_text_stats.json"
     # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCbike_2021-12_gt.pkl"
     
     # TYPE = "bike_zeroshot"
-    # MODEL_PATH = f"{project_root}/checkpoints/NYC_v3_2e_4/checkpoint-129165"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
     # ST_DATA_PATH = f"{project_root}/data/NYC/bike/h_mask_gt_bike_zeroshot.npz"
     # DATA_PATH = f"{project_root}/data/NYC/bike/NYCbike_2020-01_irregular_region_81_160_norm_formatted.json"
     # TEXT_STATS_PATH = f"{project_root}/data/NYC/bike/NYCbike_2020-01_text_stats.json"
     # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCbike_2020-01_gt.pkl"
     
     # TYPE = "crime_supervised"
-    # MODEL_PATH = f"{project_root}/checkpoints/NYC_v3_daice/checkpoint-47415"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
     # ST_DATA_PATH = f"{project_root}/data/NYC/crime/h_mask_gt_crime_supervised.npz"
     # DATA_PATH = f"{project_root}/data/NYC/crime/NYCcrime_2021_irregular_region_1_80_norm_formatted.json"
     # TEXT_STATS_PATH = f"{project_root}/data/NYC/crime/NYCcrime_2021_text_stats.json"
     # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCcrime_2021_gt.pkl"
     
     # TYPE = "crime_zeroshot"
-    # MODEL_PATH = f"{project_root}/checkpoints/NYC_v3_daice/checkpoint-47415"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
     # ST_DATA_PATH = f"{project_root}/data/NYC/crime/h_mask_gt_crime_zeroshot.npz"
     # DATA_PATH = f"{project_root}/data/NYC/crime/NYCcrime_2020_irregular_region_81_160_norm_formatted.json"
     # TEXT_STATS_PATH = f"{project_root}/data/NYC/crime/NYCcrime_2020_text_stats.json"

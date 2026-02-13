@@ -7,8 +7,8 @@ def merge_datasets(mode="train"):
     # --- 1. 路径设置 ---
     base_path = "/home/zhangdi24/LLM4TS/models/ode/preproc/Simsystem"
     springs_dir = f"{base_path}/data_springs/{mode}"
-    charged_dir = f"{base_path}/data_charged/{mode}"
-    output_dir = f"{base_path}/data_merged1/{mode}"
+    charged_dir = f"{base_path}/data_charged_100/{mode}"
+    output_dir = f"{base_path}/data_merged_100/{mode}"
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)

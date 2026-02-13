@@ -7,7 +7,12 @@ model_path=./checkpoints/vicuna-7b-v1.5-16k  # 确保此目录下有 config.json
 instruct_ds=./data/Sim/train/Sim_train_prompts.json      # 对应 data_path
 st_data_path=./data/Sim/train/h_mask_gt_merged_100.npz      # 对应 包含h,mask,gt
 text_stats_ds=./data/Sim/train/Simsystem_text_stats.json       # 对应 text_stats_path (新增)
-output_model=./checkpoints/Sim_v4_100
+
+instruct_eval_ds=./data/Sim/springs/Springs_test_prompts.json      # 对应 data_path
+st_data_eval_path=./data/Sim/springs/h_mask_gt_springs.npz      # 对应 包含h,mask,gt
+text_stats_eval_ds=./data/Sim/springs/Simsystem_text_stats.json       # 对应 text_stats_path (新增)
+
+output_model=./checkpoints/Sim_v6
 
 
 # 离线运行 wandb
@@ -23,18 +28,21 @@ python urbangpt/train/train_mem.py \
     --data_path ${instruct_ds} \
     --st_data_path ${st_data_path} \
     --text_stats_path ${text_stats_ds} \
+    --data_eval_path ${instruct_eval_ds} \
+    --st_data_eval_path ${st_data_eval_path} \
+    --text_stats_eval_path ${text_stats_eval_ds} \
     --freeze_backbone True \
     --tune_st_mlp_adapter True \
     --resampler_num_latents 5 \
     --bf16 True \
     --output_dir ${output_model} \
-    --num_train_epochs 100 \
-    --per_device_train_batch_size 16 \
+    --num_train_epochs 300 \
+    --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "no" \
     --save_strategy "epoch" \
-    --save_total_limit 10 \
+    --save_total_limit 5 \
     --learning_rate 2e-4 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
