@@ -39,7 +39,7 @@ from torch.nn import MSELoss
 from transformers import AutoConfig, AutoModelForCausalLM, LlamaConfig, LlamaModel, LlamaForCausalLM
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
-from .PerceiverResampler_bias import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
+from .PerceiverResampler import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
 
 
 # =============================================================================
