@@ -79,7 +79,7 @@ The LLM requires textual prompts to understand the task and context. You need to
 
 With the dynamics evidence and text files prepared, you can now train the main LLM Forecaster.
 
-- **Training script**: `/home/zhangdi24/LLM4TS/models/LLMODE/llmode_train.sh` (referred to as `train.sh` below) 
+- **Training script**: `models/LLMODE/llmode_train.sh` (referred to as `train.sh` below) 
 1.  **Configure `train.sh`**:
     *   Open your training script (`train.sh` or similar).
     *   Set the correct paths for all your data files and the base model.
