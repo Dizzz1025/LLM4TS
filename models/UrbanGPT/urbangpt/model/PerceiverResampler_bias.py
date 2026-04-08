@@ -52,7 +52,7 @@ class PerceiverAttention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
         self.to_out = nn.Linear(inner_dim, dim, bias = False)
-        self.beta = nn.Parameter(torch.tensor(-5.0))
+        self.beta = nn.Parameter(torch.tensor([-5.0]))
         # self.beta = nn.Parameter(torch.tensor(1.0))
         self.attn_drop = nn.Dropout(0.1)
         self.out_drop  = nn.Dropout(0.1)
@@ -408,7 +408,7 @@ class GatedCrossAttentionBlock(nn.Module):
         self.text_attn = MaskedCrossAttention(dim = dim, dim_head = dim_head, heads = heads)
         self.attn_gate = nn.Parameter(torch.tensor([0.])) # alpha
         # self.fusion_lambda = nn.Parameter(torch.tensor(0.0)) # lambda
-        self.fusion_lambda = nn.Parameter(torch.tensor(0.0)) # lambda
+        self.fusion_lambda = nn.Parameter(torch.tensor([0.0])) # lambda
 
         self.ff = FeedForward(dim, mult = ff_mult)
         self.ff_gate = nn.Parameter(torch.tensor([0.]))

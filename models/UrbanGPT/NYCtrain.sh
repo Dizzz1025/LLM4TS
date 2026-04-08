@@ -32,19 +32,23 @@ python urbangpt/train/train_mem_nyc.py \
     --bf16 True \
     --output_dir ${output_model} \
     --num_train_epochs 200 \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 16 \
     --evaluation_strategy "no" \
     --save_strategy "epoch" \
-    --save_total_limit 3 \
+    --save_total_limit 1 \
     --learning_rate 2e-4 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --tf32 True \
-    --model_max_length 2048 \
+    --model_max_length 512 \
     --gradient_checkpointing False \
     --report_to wandb \
+    --load_in_8bit False\
+    --load_in_4bit True\
+    --bnb_4bit_quant_type nf4\
+    --use_lora True
 

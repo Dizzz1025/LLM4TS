@@ -62,7 +62,7 @@ class STQwen2Model(Qwen2Model):
             ]
         )
         self.gradient_checkpointing = False
-        self.time_embed_scale = nn.Parameter(torch.tensor(0.1))
+        self.time_embed_scale = nn.Parameter(torch.tensor([0.1]))
 
     def forward(
         self,
@@ -85,6 +85,11 @@ class STQwen2Model(Qwen2Model):
 
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        # 训练阶段禁用 cache，避免拼接 query slots 后 position/cache 对不上
+        if self.training:
+            use_cache = False
+        if self.gradient_checkpointing and self.training and use_cache:
+            use_cache = False
 
         if h is None:
             raise ValueError("Input 'h' (ODE hidden variables) is required.")
@@ -133,7 +138,7 @@ class STQwen2Model(Qwen2Model):
         for b in range(batch_size):
             full_mask = mask_obs[b]
             pred_mask = torch.zeros_like(full_mask)
-            pred_mask[60:] = full_mask[60:]
+            pred_mask[144:] = full_mask[144:]
 
             obs_indices = torch.nonzero(pred_mask, as_tuple=False).squeeze(-1).float()
             norm_time = (obs_indices / (t_max - 1 + 1e-6)).to(target_dtype)
@@ -404,7 +409,7 @@ class STQwen2ForCausalLM(Qwen2ForCausalLM):
             h=h,
             mask_obs=mask_obs,
             return_dict=True,
-            position_ids=position_ids,
+            position_ids=None,
             **kwargs,
         )
 
@@ -418,7 +423,7 @@ class STQwen2ForCausalLM(Qwen2ForCausalLM):
             pred_hidden = hidden_states[final_query_mask]
             preds = self.predict_head(pred_hidden)
             obs_mask_60 = torch.zeros_like(mask_obs)
-            obs_mask_60[:, 60:] = mask_obs[:, 60:]
+            obs_mask_60[:, 144:] = mask_obs[:, 144:]
             obs_mask_60 = obs_mask_60.bool()
             true_values = gt[obs_mask_60].to(preds.device).to(preds.dtype)
             loss = MSELoss()(preds, true_values)

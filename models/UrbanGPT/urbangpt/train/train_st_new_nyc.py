@@ -26,7 +26,7 @@ from typing import Dict, Optional, Sequence, List
 import torch
 import transformers
 from torch.utils.data import Dataset
-from transformers import Trainer, TrainerCallback
+from transformers import Trainer, TrainerCallback, BitsAndBytesConfig
 
 from urbangpt.model.STQwen2_new import STQwen2ForCausalLM, STQwen2Config
 
@@ -34,6 +34,7 @@ import numpy as np
 
 import random
 import wandb
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 IGNORE_INDEX = -100
 
 def setup_seed(seed):
@@ -49,6 +50,17 @@ class ModelArguments:
     freeze_backbone: bool = field(default=False)
     tune_st_mlp_adapter: bool = field(default=False)
     resampler_num_latents: int = field(default=5)
+
+    # quantization
+    load_in_8bit: bool = field(default=False)
+    load_in_4bit: bool = field(default=False)
+    bnb_4bit_quant_type: str = field(default="nf4")
+
+    # LoRA for quantized training
+    use_lora: bool = field(default=False)
+    lora_r: int = field(default=8)
+    lora_alpha: int = field(default=16)
+    lora_dropout: float = field(default=0.05)
 
 @dataclass
 class DataArguments:
@@ -167,8 +179,8 @@ class DataCollatorForSTQwen2(object):
             stat_input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
         )
         # 显式生成 position_ids [batch, seq_len]
-        batch_size, seq_len = input_ids.shape
-        position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len).clone()
+        # batch_size, seq_len = input_ids.shape
+        # position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len).clone()
         
         # 对时间序列特征 h 进行 Padding [B, T_max, D]
         h = torch.nn.utils.rnn.pad_sequence(h, batch_first=True, padding_value=0.0).contiguous()
@@ -179,7 +191,7 @@ class DataCollatorForSTQwen2(object):
 
         batch = dict(
             input_ids=input_ids,
-            position_ids=position_ids,
+            # position_ids=position_ids,
             stat_input_ids=stat_input_ids,
             h=h,
             mask_obs=mask_obs,
@@ -229,6 +241,18 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     data_collator = DataCollatorForSTQwen2(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
 
+def _get_monitor_model(real_model):
+    if hasattr(real_model, "model") and hasattr(real_model.model, "get_monitor_stats"):
+        return real_model.model
+
+    if hasattr(real_model, "base_model") and hasattr(real_model.base_model, "model"):
+        base = real_model.base_model.model
+        if hasattr(base, "model") and hasattr(base.model, "get_monitor_stats"):
+            return base.model
+
+    return None
+
+
 class CustomParamMonitorCallback(TrainerCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         """
@@ -275,6 +299,8 @@ class STTrainer(Trainer):
 
             for n, p in self.model.named_parameters():
                 if not p.requires_grad:
+                    continue
+                if "original_module" in n:
                     continue
                 
                 # 检查是否属于门控参数
@@ -325,6 +351,11 @@ def train():
     training_args.metric_for_best_model = "eval_loss" # 这里填 eval_loss 里的 "loss"
     training_args.greater_is_better = False      # Loss 越小越好
     training_args.save_total_limit = 2           # 最多保留 2 个 checkpoint，节省磁盘
+    if model_args.load_in_8bit or model_args.load_in_4bit:
+        if training_args.optim == "adamw_torch":
+            training_args.optim = "paged_adamw_8bit"
+        # PEFT 包装后，保留自定义输入字段，避免被 Trainer 丢弃
+        training_args.remove_unused_columns = False
     local_rank = getattr(training_args, "local_rank", -1)
     # device_map = None
     # if local_rank != -1:
@@ -334,12 +365,46 @@ def train():
     config = STQwen2Config.from_pretrained(model_args.model_name_or_path)
     config.resampler_num_latents = model_args.resampler_num_latents
     
+    quantization_config = None
+    compute_dtype = torch.bfloat16 if training_args.bf16 else torch.float16
+
+    if model_args.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=compute_dtype,
+            llm_int8_skip_modules=[
+                "st_projector",
+                "feat_resampler",
+                "text_resampler",
+                "time_embedding",
+                "gca_layers",
+                "predict_head",
+                "lm_head",
+            ],
+        )
+    elif model_args.load_in_8bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_skip_modules=[
+                "st_projector",
+                "feat_resampler",
+                "text_resampler",
+                "time_embedding",
+                "gca_layers",
+                "predict_head",
+                "lm_head",
+            ],
+        )
+
     model = STQwen2ForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         config=config,
         cache_dir=training_args.cache_dir,
         # device_map=device_map,
-        torch_dtype=(torch.bfloat16 if training_args.bf16 else torch.float32)
+        quantization_config=quantization_config,
+        torch_dtype=compute_dtype
     )
     
     model.generation_config.do_sample = False
@@ -359,31 +424,71 @@ def train():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    if model_args.load_in_8bit or model_args.load_in_4bit:
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=training_args.gradient_checkpointing,
+        )
+
+        # 给 Trainer 一个最小 PEFT 外壳，避免“purely quantized model”报错。
+        # 这里 LoRA 只作为壳，主干仍然不训练；真正训练的是你插入的自定义模块。
+        peft_config = LoraConfig(
+            r=1,
+            lora_alpha=1,
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=["q_proj"],
+        )
+        model = get_peft_model(model, peft_config)
+
+        # 先全部冻结
+        for _, p in model.named_parameters():
+            p.requires_grad = False
+
+        # 手动打开你自己插入的模块（全参训练）
+        base_model = model.base_model.model if hasattr(model, "base_model") else model
+
+        base_model.model.st_projector.requires_grad_(True)
+        base_model.model.feat_resampler.requires_grad_(True)
+        base_model.model.text_resampler.requires_grad_(True)
+        base_model.model.time_embedding.requires_grad_(True)
+        base_model.model.gca_layers.requires_grad_(True)
+        base_model.predict_head.requires_grad_(True)
+        base_model.model.time_embed_scale.requires_grad_(True)
+
+        # 保留一个极小 LoRA 壳参与训练，确保量化 + Trainer 路径稳定
+        for n, p in model.named_parameters():
+            if "lora_" in n and p.dtype.is_floating_point:
+                p.requires_grad = True
+
     # 冻结策略
-    if model_args.freeze_backbone:
+    is_kbit = model_args.load_in_8bit or model_args.load_in_4bit
+    if model_args.freeze_backbone and not is_kbit:
         model.model.requires_grad_(False)
     
     # 确保 Resampler, TimeEmbedding, GCA, PredictHead 是可训练的
-    model.model.st_projector.requires_grad_(True)
-    model.model.feat_resampler.requires_grad_(True)
-    model.model.text_resampler.requires_grad_(True)
-    model.model.time_embedding.requires_grad_(True)
-    model.model.gca_layers.requires_grad_(True)
-    model.predict_head.requires_grad_(True)
-    model.model.time_embed_scale.requires_grad_(True)
+    if not (model_args.load_in_8bit or model_args.load_in_4bit):
+        model.model.st_projector.requires_grad_(True)
+        model.model.feat_resampler.requires_grad_(True)
+        model.model.text_resampler.requires_grad_(True)
+        model.model.time_embedding.requires_grad_(True)
+        model.model.gca_layers.requires_grad_(True)
+        model.predict_head.requires_grad_(True)
+        model.model.time_embed_scale.requires_grad_(True)
     
     trainable = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     if data_module['eval_dataset'] is None:
         logging.error("Evaluation dataset is missing! Evaluation strategy 'epoch' will fail.")
-    monitor_cb = CustomParamMonitorCallback()
+    # monitor_cb = CustomParamMonitorCallback()
     trainer = STTrainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
         **data_module,
-        callbacks=[monitor_cb]
+        # callbacks=[monitor_cb]
     )
 
     # 7. 训练过程
@@ -397,10 +502,24 @@ def train():
     
     # 8. 安全保存：只在主进程执行
     if trainer.is_world_process_zero():
-        # 保存模型权重和配置文件
-        model.save_pretrained(training_args.output_dir)
-        # 别忘了保存 tokenizer，方便推理时直接加载
+        # 保存 PEFT 外壳 / adapter
+        trainer.model.save_pretrained(training_args.output_dir)
         tokenizer.save_pretrained(training_args.output_dir)
+
+        # 额外保存你自己插入模块的权重
+        base_model = trainer.model.base_model.model if hasattr(trainer.model, "base_model") else trainer.model
+        torch.save(
+            {
+                "st_projector": base_model.model.st_projector.state_dict(),
+                "feat_resampler": base_model.model.feat_resampler.state_dict(),
+                "text_resampler": base_model.model.text_resampler.state_dict(),
+                "time_embedding": base_model.model.time_embedding.state_dict(),
+                "gca_layers": base_model.model.gca_layers.state_dict(),
+                "predict_head": base_model.predict_head.state_dict(),
+                "time_embed_scale": base_model.model.time_embed_scale.detach().cpu(),
+            },
+            os.path.join(training_args.output_dir, "custom_modules.pt"),
+        )
 
 if __name__ == "__main__":
     train()
