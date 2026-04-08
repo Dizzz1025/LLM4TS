@@ -4,6 +4,4 @@ from urbangpt.model.model_adapter import (
     add_model_args,
 )
 
-# from urbangpt.model.STLlama import STLlamaForCausalLM, load_model_pretrained
-
-from urbangpt.model.STLlama_new import STLlamaConfig, STLlamaForCausalLM
+from urbangpt.model.STQwen2_new import STQwen2Config, STQwen2ForCausalLM

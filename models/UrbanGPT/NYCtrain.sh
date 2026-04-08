@@ -1,14 +1,14 @@
 # 1. 基础路径配置
-model_path=./checkpoints/vicuna-7b-v1.5-16k  # 确保此目录下有 config.json 和权重
-instruct_ds=./data/NYC/train/NYC_train_prompts.json      # 对应 data_path
-st_data_path=./data/NYC/train/h_mask_gt_merged.npz      # 对应 包含h,mask,gt
-text_stats_ds=./data/NYC/train/NYCmerged_text_stats.json       # 对应 text_stats_path (新增)
+model_path=/root/autodl-tmp/Qwen  # 确保此目录下有 config.json 和权重
+instruct_ds=/root/autodl-tmp/LLM4TS/models/UrbanGPT/data/NYC/train/NYC_train_prompts.json      # 对应 data_path
+st_data_path=/root/autodl-tmp/LLM4TS/models/UrbanGPT/data/NYC/train/h_mask_gt_merged.npz      # 对应 包含h,mask,gt
+text_stats_ds=/root/autodl-tmp/LLM4TS/models/UrbanGPT/data/NYC/train/NYCmerged_text_stats.json       # 对应 text_stats_path (新增)
 
-instruct_eval_ds=./data/NYC/taxi/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json      # 对应 data_path
-st_data_eval_path=./data/NYC/taxi/h_mask_gt_taxi_zeroshot.npz      # 对应 包含h,mask,gt
-text_stats_eval_ds=./data/NYC/taxi/NYCtaxi_2020-01_text_stats.json       # 对应 text_stats_path (新增)
+instruct_eval_ds=/root/autodl-tmp/LLM4TS/models/UrbanGPT/data/NYC/taxi/new_data/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json      # 对应 data_path
+st_data_eval_path=/root/autodl-tmp/LLM4TS/models/UrbanGPT/data/NYC/taxi/new_data/h_mask_gt_taxi_zeroshot.npz      # 对应 包含h,mask,gt
+text_stats_eval_ds=/root/autodl-tmp/LLM4TS/models/UrbanGPT/data/NYC/taxi/new_data/NYCtaxi_2020-01_text_stats.json       # 对应 text_stats_path (新增)
 
-output_model=./checkpoints/NYC_cross8
+output_model=./checkpoints/NYC_qwen
 
 # 离线运行 wandb
 export WANDB_MODE=offline

@@ -28,7 +28,7 @@ import transformers
 from torch.utils.data import Dataset
 from transformers import Trainer, TrainerCallback
 
-from urbangpt.model.STLlama_new_nyc import STLlamaForCausalLM, STLlamaConfig
+from urbangpt.model.STQwen2_new import STQwen2ForCausalLM, STQwen2Config
 
 import numpy as np
 
@@ -145,7 +145,7 @@ class LazySupervisedDataset(Dataset):
         )
 
 @dataclass
-class DataCollatorForSTLlama(object):
+class DataCollatorForSTQwen2(object):
     """Collate examples for ST-Llama."""
 
     tokenizer: transformers.PreTrainedTokenizer
@@ -207,12 +207,26 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
         text_stats_path=data_args.text_stats_eval_path
     )
     
-    max_eval_samples = 4000
+    # max_eval_samples = 40
+    # if len(eval_dataset.list_data_dict) > max_eval_samples:
+    #     logging.warning(f"Slicing eval_dataset from {len(eval_dataset.list_data_dict)} to {max_eval_samples} samples.")
+    #     eval_dataset.list_data_dict = eval_dataset.list_data_dict[:max_eval_samples]
+    max_train_samples = 64   # 冒烟测试先设小一点，比如 16 / 32 / 64
+    max_eval_samples = 40
+
+    if len(train_dataset.list_data_dict) > max_train_samples:
+        logging.warning(
+            f"Slicing train_dataset from {len(train_dataset.list_data_dict)} to {max_train_samples} samples."
+        )
+        train_dataset.list_data_dict = train_dataset.list_data_dict[:max_train_samples]
+
     if len(eval_dataset.list_data_dict) > max_eval_samples:
-        logging.warning(f"Slicing eval_dataset from {len(eval_dataset.list_data_dict)} to {max_eval_samples} samples.")
+        logging.warning(
+            f"Slicing eval_dataset from {len(eval_dataset.list_data_dict)} to {max_eval_samples} samples."
+        )
         eval_dataset.list_data_dict = eval_dataset.list_data_dict[:max_eval_samples]
         
-    data_collator = DataCollatorForSTLlama(tokenizer=tokenizer)
+    data_collator = DataCollatorForSTQwen2(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
 
 class CustomParamMonitorCallback(TrainerCallback):
@@ -317,10 +331,10 @@ def train():
     #     device_map = {"": local_rank}
 
     # 初始化配置与模型
-    config = STLlamaConfig.from_pretrained(model_args.model_name_or_path)
+    config = STQwen2Config.from_pretrained(model_args.model_name_or_path)
     config.resampler_num_latents = model_args.resampler_num_latents
     
-    model = STLlamaForCausalLM.from_pretrained(
+    model = STQwen2ForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         config=config,
         cache_dir=training_args.cache_dir,
@@ -343,7 +357,7 @@ def train():
         use_fast=False,
     )
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.unk_token
+        tokenizer.pad_token = tokenizer.eos_token
 
     # 冻结策略
     if model_args.freeze_backbone:
