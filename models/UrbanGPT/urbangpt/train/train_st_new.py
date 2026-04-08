@@ -343,7 +343,9 @@ def train():
         use_fast=False,
     )
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.unk_token
+        tokenizer.pad_token = tokenizer.unk_token or tokenizer.eos_token
+    if tokenizer.pad_token is None:
+        raise ValueError("Tokenizer is missing both unk_token and eos_token; cannot set pad_token.")
 
     # 冻结策略
     if model_args.freeze_backbone:

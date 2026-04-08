@@ -60,6 +60,14 @@ from .PerceiverResampler_bias import PerceiverResampler, TimeEmbedding, GatedCro
 class STLlamaConfig(LlamaConfig):
     model_type = "STLlama"
     def __init__(self, **kwargs):
+        rope_scaling = kwargs.get("rope_scaling")
+        if isinstance(rope_scaling, dict):
+            rope_type = rope_scaling.get("rope_type") or rope_scaling.get("type")
+            if rope_type == "llama3":
+                kwargs["rope_scaling"] = {
+                    "type": "linear",
+                    "factor": float(rope_scaling.get("factor", 8.0))
+                }
         super().__init__(**kwargs)
         # Resampler Config
         self.resampler_num_latents = kwargs.get("resampler_num_latents", 5)

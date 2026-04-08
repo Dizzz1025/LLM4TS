@@ -29,6 +29,9 @@ import json
 import os.path as osp
 
 from .PerceiverResampler_bias import PerceiverResampler, TimeEmbedding, GatedCrossAttentionBlock
+
+from transformers.cache_utils import DynamicCache, Cache
+# from transformers.masking_utils import create_causal_mask
 # from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 # IGNORE_INDEX = -100
 # DEFAULT_STHIS_TOKEN = "<ST_HIS>"
@@ -60,6 +63,14 @@ from .PerceiverResampler_bias import PerceiverResampler, TimeEmbedding, GatedCro
 class STLlamaConfig(LlamaConfig):
     model_type = "STLlama"
     def __init__(self, **kwargs):
+        rope_scaling = kwargs.get("rope_scaling")
+        if isinstance(rope_scaling, dict):
+            rope_type = rope_scaling.get("rope_type") or rope_scaling.get("type")
+            if rope_type == "llama3":
+                kwargs["rope_scaling"] = {
+                    "type": "linear",
+                    "factor": float(rope_scaling.get("factor", 8.0))
+                }
         super().__init__(**kwargs)
         # Resampler Config
         self.resampler_num_latents = kwargs.get("resampler_num_latents", 5)
@@ -145,8 +156,8 @@ class STLlamaModel(LlamaModel):
     def forward(
             self,
             input_ids: torch.LongTensor = None,
-            stat_input_ids: torch.LongTensor = None,    # --- 新增输入 ---
-            stat_attention_mask: Optional[torch.Tensor] = None, # --- 新增输入 ---
+            stat_input_ids: torch.LongTensor = None,
+            stat_attention_mask: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
@@ -154,8 +165,9 @@ class STLlamaModel(LlamaModel):
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
-            h: Optional[torch.Tensor] = None,          # [B, T_raw, D]
-            mask_obs: Optional[torch.Tensor] = None,   # [B, T_raw]
+            h: Optional[torch.Tensor] = None,
+            mask_obs: Optional[torch.Tensor] = None,
+            cache_position: Optional[torch.LongTensor] = None,
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         
@@ -165,6 +177,14 @@ class STLlamaModel(LlamaModel):
         ) # 是否返回每一层的hidden_state，而不是最后一层
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        # 训练阶段禁用 cache；当前自定义 prompt 会在文本后拼接 query slots，
+        # 外部传入的 cache / position_ids 与拼接后的真实序列长度不一致，
+        # 容易导致 rotary position embedding 维度错位。
+        if self.training:
+            use_cache = False
+        if self.gradient_checkpointing and self.training and use_cache:
+            use_cache = False
+
         target_dtype = self.st_projector.weight.dtype
         # ------------------------------------------------------------------
         # 1. Temporal Encoding: h -> Resampler -> Latents
@@ -194,12 +214,17 @@ class STLlamaModel(LlamaModel):
             feat_kv = feat_kv + self.time_embed_scale * time_emb_out
             
         # Path B: Text Prior (Delta_text) - 新增逻辑
+        # if stat_input_ids is not None:
+        #     # 使用 LLM 自带的 Embedding 层将统计文本 ID 转换为向量
+        #     stat_embeds = self.embed_tokens(stat_input_ids).to(target_dtype)
+        #     # 通过第二个 Resampler 压缩
+        #     text_kv, _ = self.text_resampler(stat_embeds) # [B, Text_Latents, D]
+        # Path B: Text Prior (Delta_text)
+        text_kv = None
         if stat_input_ids is not None:
-            # 使用 LLM 自带的 Embedding 层将统计文本 ID 转换为向量
             stat_embeds = self.embed_tokens(stat_input_ids).to(target_dtype)
-            # 通过第二个 Resampler 压缩
-            text_kv, _ = self.text_resampler(stat_embeds) # [B, Text_Latents, D]
-            
+            text_kv, _ = self.text_resampler(stat_embeds)
+                    
         # ------------------------------------------------------------------
         # 2. Construct Prompt: [Text Prompt] + [Query Slots]
         # ------------------------------------------------------------------
@@ -264,27 +289,71 @@ class STLlamaModel(LlamaModel):
             padded_attention_mask[b, :length] = 1 
             final_query_mask[b, :length] = query_slots_mask_list[b]
 
-        # --- 掩码处理：2D -> 4D ---
-        if attention_mask is None or attention_mask.dim() == 2:
-            mask_to_use = padded_attention_mask
-            causal_mask = self._prepare_decoder_attention_mask(
-                mask_to_use,
-                (batch_size, max_len),
-                padded_embeds,
-                0
+        # # --- 掩码处理：2D -> 4D ---
+        # if attention_mask is None or attention_mask.dim() == 2:
+        #     mask_to_use = padded_attention_mask
+        #     # causal_mask = self._prepare_decoder_attention_mask(
+        #     #     mask_to_use,
+        #     #     (batch_size, max_len),
+        #     #     padded_embeds,
+        #     #     0
+        #     # )
+        #     if attention_mask is None or attention_mask.dim() == 2:
+        #         attention_mask = padded_attention_mask
+
+        #     causal_mask = create_causal_mask(
+        #         config=self.config,
+        #         inputs_embeds=padded_embeds,
+        #         attention_mask=attention_mask,
+        #         past_key_values=None,
+        #         position_ids=new_position_ids,
+        #     )
+        # #     causal_mask = _prepare_4d_causal_attention_mask(
+        # #     mask_to_use,
+        # #     (batch_size, max_len),
+        # #     padded_embeds,
+        # #     past_key_values_length=0
+        # # )
+        # else:
+        #     causal_mask = attention_mask
+        # if causal_mask is not None:
+        #     causal_mask = causal_mask.to(target_dtype)
+        # hidden_states = padded_embeds
+        # # attention_mask 仅用于处理 padding
+        # attention_mask = padded_attention_mask
+        # --- cache / position_ids / causal mask (align with the concatenated prompt) ---
+        if use_cache and not isinstance(past_key_values, Cache):
+            if past_key_values is None:
+                past_key_values = DynamicCache()
+            else:
+                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+
+        # 关键：位置索引必须基于“文本 + query slots”拼接后的真实序列长度重新构造，
+        # 不能复用外部仅针对文本部分生成的 position_ids / attention_mask。
+        if cache_position is None or cache_position.shape[0] != max_len:
+            past_seen_tokens = past_key_values.get_seq_length() if (use_cache and past_key_values is not None) else 0
+            cache_position = torch.arange(
+                past_seen_tokens,
+                past_seen_tokens + max_len,
+                device=device,
+                dtype=torch.long,
             )
-        #     causal_mask = _prepare_4d_causal_attention_mask(
-        #     mask_to_use,
-        #     (batch_size, max_len),
-        #     padded_embeds,
-        #     past_key_values_length=0
-        # )
-        else:
-            causal_mask = attention_mask
+
+        new_position_ids = cache_position.unsqueeze(0).expand(batch_size, -1)
+        attention_mask = padded_attention_mask
+
+        causal_mask = self._update_causal_mask(
+            attention_mask,
+            padded_embeds,
+            cache_position,
+            past_key_values if use_cache else None,
+            output_attentions,
+        )
+
         if causal_mask is not None:
             causal_mask = causal_mask.to(target_dtype)
+
         hidden_states = padded_embeds
-        # attention_mask 仅用于处理 padding
         attention_mask = padded_attention_mask
 
         # ------------------------------------------------------------------
@@ -292,8 +361,10 @@ class STLlamaModel(LlamaModel):
         # ------------------------------------------------------------------
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
+        next_decoder_cache = None
 
         gca_idx = 0
+        position_embeddings = self.rotary_emb(hidden_states, new_position_ids)
         for i, decoder_layer in enumerate(self.layers):
             target_gca = None
             if i % self.gca_interval == 0 and gca_idx < len(self.gca_layers):
@@ -326,14 +397,18 @@ class STLlamaModel(LlamaModel):
             #     layer_outputs = decoder_layer(hidden_states, attention_mask=causal_mask, position_ids=new_position_ids)
             #     hidden_states = layer_outputs[0]
             layer_outputs = decoder_layer(
-                hidden_states, 
-                attention_mask=causal_mask, 
+                hidden_states,
+                attention_mask=causal_mask,
                 position_ids=new_position_ids,
-                past_key_value=None,
+                past_key_value=past_key_values if use_cache else None,
                 output_attentions=output_attentions,
                 use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
             )
             hidden_states = layer_outputs[0]
+            if use_cache:
+                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
             if target_gca is not None:
                 hidden_states = target_gca(hidden_states, feat_kv, text_kv)
 
@@ -342,7 +417,7 @@ class STLlamaModel(LlamaModel):
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             # 将 query_mask 传递出去供 Head 使用
-            past_key_values=None 
+            past_key_values=next_decoder_cache
         )
 
     def get_monitor_stats(self):
@@ -409,7 +484,8 @@ class STLlamaForCausalLM(LlamaForCausalLM):
             h=h,
             mask_obs=mask_obs,
             return_dict=True,
-            position_ids=position_ids,
+            position_ids=None,
+            use_cache=False,
             **kwargs
         )
 

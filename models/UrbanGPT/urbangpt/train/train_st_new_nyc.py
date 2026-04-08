@@ -112,6 +112,13 @@ class LazySupervisedDataset(Dataset):
             truncation=True,
         ).input_ids[0]
 
+        # messages = [{"role": "user", "content": instruction}]
+        # input_ids = tokenizer.apply_chat_template(
+        #     messages,
+        #     add_generation_prompt=False,
+        #     return_tensors="pt"
+        # )[0]
+
         # 2. Path Delta_text: Statistical Prior (Secondary Source)
         # Get the [SEG_STATS] string we generated for this ID
         stat_text = self.text_prior_dict.get(sample_key, "[SEG_STATS] no_prior_available [/SEG_STATS]")
@@ -207,10 +214,20 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
         text_stats_path=data_args.text_stats_eval_path
     )
     
-    max_eval_samples = 4000
+    max_eval_samples = 40
     if len(eval_dataset.list_data_dict) > max_eval_samples:
         logging.warning(f"Slicing eval_dataset from {len(eval_dataset.list_data_dict)} to {max_eval_samples} samples.")
         eval_dataset.list_data_dict = eval_dataset.list_data_dict[:max_eval_samples]
+    # max_train_samples = 32
+    # max_eval_samples = 8
+
+    # if len(train_dataset.list_data_dict) > max_train_samples:
+    #     logging.warning(f"Slicing train_dataset from {len(train_dataset.list_data_dict)} to {max_train_samples} samples.")
+    #     train_dataset.list_data_dict = train_dataset.list_data_dict[:max_train_samples]
+
+    # if len(eval_dataset.list_data_dict) > max_eval_samples:
+    #     logging.warning(f"Slicing eval_dataset from {len(eval_dataset.list_data_dict)} to {max_eval_samples} samples.")
+    #     eval_dataset.list_data_dict = eval_dataset.list_data_dict[:max_eval_samples]
         
     data_collator = DataCollatorForSTLlama(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
@@ -310,7 +327,7 @@ def train():
     training_args.load_best_model_at_end = True  # 训练结束自动加载指标最好的权重
     training_args.metric_for_best_model = "eval_loss" # 这里填 eval_loss 里的 "loss"
     training_args.greater_is_better = False      # Loss 越小越好
-    training_args.save_total_limit = 2           # 最多保留 2 个 checkpoint，节省磁盘
+    training_args.save_total_limit = 1           # 最多保留 2 个 checkpoint，节省磁盘
     local_rank = getattr(training_args, "local_rank", -1)
     # device_map = None
     # if local_rank != -1:
@@ -343,7 +360,9 @@ def train():
         use_fast=False,
     )
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.unk_token
+        tokenizer.pad_token = tokenizer.unk_token or tokenizer.eos_token
+    if tokenizer.pad_token is None:
+        raise ValueError("Tokenizer is missing both unk_token and eos_token; cannot set pad_token.")
 
     # 冻结策略
     if model_args.freeze_backbone:

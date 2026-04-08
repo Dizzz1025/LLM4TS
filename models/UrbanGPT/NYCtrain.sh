@@ -1,5 +1,5 @@
 # 1. 基础路径配置
-model_path=./checkpoints/vicuna-7b-v1.5-16k  # 确保此目录下有 config.json 和权重
+model_path=/root/autodl-tmp/Meta-Llama-3.1-8B-Instruct # 确保此目录下有 config.json 和权重
 instruct_ds=./data/NYC/train/NYC_train_prompts.json      # 对应 data_path
 st_data_path=./data/NYC/train/h_mask_gt_merged.npz      # 对应 包含h,mask,gt
 text_stats_ds=./data/NYC/train/NYCmerged_text_stats.json       # 对应 text_stats_path (新增)
@@ -8,7 +8,7 @@ instruct_eval_ds=./data/NYC/taxi/NYCtaxi_2020-01_irregular_region_81_160_norm_fo
 st_data_eval_path=./data/NYC/taxi/h_mask_gt_taxi_zeroshot.npz      # 对应 包含h,mask,gt
 text_stats_eval_ds=./data/NYC/taxi/NYCtaxi_2020-01_text_stats.json       # 对应 text_stats_path (新增)
 
-output_model=./checkpoints/NYC_cross8
+output_model=./checkpoints/NYC_llama
 
 # 离线运行 wandb
 export WANDB_MODE=offline
@@ -37,8 +37,8 @@ python urbangpt/train/train_mem_nyc.py \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "no" \
     --save_strategy "epoch" \
-    --save_total_limit 3 \
-    --learning_rate 2e-4 \
+    --save_total_limit 1 \
+    --learning_rate 2e-5 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
