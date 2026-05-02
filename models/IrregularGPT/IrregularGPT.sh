@@ -14,7 +14,7 @@ export WANDB_MODE=offline
 # python -m torch.distributed.run --nnodes=1 --nproc_per_node=2 --master_port=20001 \
 #     urbangpt/train/train_mem.py \
 
-python llmode/train/train_st.py \
+python IrregularGPT/train/train_st.py \
     --model_name_or_path ${model_path} \
     --version v1 \
     --data_path ${instruct_ds} \

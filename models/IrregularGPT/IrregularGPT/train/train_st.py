@@ -1,7 +1,7 @@
 # Copyright 2023 Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li
 #
 # This file is adopted from the Stanford Alpaca repository and has been modified
-# for the LLMODE project, including adaptations for spatio-temporal data handling
+# for the IrregularGPT project, including adaptations for spatio-temporal data handling
 # influenced by the UrbanGPT project.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,7 +18,7 @@
 
 """
 This script is the main entry point for training the STLlama model, which is the
-LLM component of the LLMODE framework. It handles data loading, model configuration,
+LLM component of the IrregularGPT framework. It handles data loading, model configuration,
 and the training process using the Hugging Face Transformers library.
 
 The script is responsible for:
@@ -48,7 +48,7 @@ import random
 import wandb
 
 # Local imports for the custom model architecture.
-from llmode.model import *
+from IrregularGPT.model import *
 
 IGNORE_INDEX = -100
 
@@ -275,7 +275,7 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     # --- 2. Model and Tokenizer Setup ---
-    # Load model configuration and update with custom LLMODE parameters.
+    # Load model configuration and update with custom IrregularGPT parameters.
     config = STLlamaConfig.from_pretrained(model_args.model_name_or_path)
     config.resampler_num_latents = model_args.resampler_num_latents
     

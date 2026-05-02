@@ -1,10 +1,10 @@
-# LLMODE: Aligning ODEs with LLMs for Spatio-Temporal Forecasting
+# Harnessing Continuous-Time LLM Forecasting Over Irregular Spatio-Temporal Observations via Progressive Token Injection
 
-This document provides a comprehensive guide to the training pipeline of the **LLMODE** framework, based on the paper "LLMODE: Aligning ODEs with LLMs via Gated Token Injection for Irregular Spatio-Temporal Forecasting". The goal of this project is to tackle irregular spatio-temporal forecasting by combining continuous-time models (ODEs) with Large Language Models (LLMs).
+This document provides a comprehensive guide to the training pipeline of the **IrregularGPT** framework, based on the paper "Harnessing Continuous-Time LLM Forecasting Over Irregular Spatio-Temporal Observations via Progressive Token Injection". The goal of this project is to tackle irregular spatio-temporal forecasting by combining continuous-time models (ODEs) with Large Language Models (LLMs).
 
 ## Architecture Overview
 
-LLMODE is a **two-stage pipeline**. An **ODE-based dynamics encoder** first extracts continuous-time latent states from irregular spatio-temporal data, and a **frozen LLM forecaster** then performs forecasting by consuming compressed evidence tokens plus textual priors.
+IrregularGPT is a **two-stage pipeline**. An **ODE-based dynamics encoder** first extracts continuous-time latent states from irregular spatio-temporal data, and a **frozen LLM forecaster** then performs forecasting by consuming compressed evidence tokens plus textual priors.
 
 1. **ODE Encoder (Latent Dynamics Encoding)**
    - **Code**: `models/ode/gru_ode_bayes/models.py`
@@ -13,12 +13,12 @@ LLMODE is a **two-stage pipeline**. An **ODE-based dynamics encoder** first extr
 2. **LLM Forecaster (Token Compression + Gated Injection)**
    - **Code**:
      - Token compression: `models/resampler/PerceiverResampler.py`
-     - LLM injection + forecasting: `models/LLMODE/STLlama.py`
+     - LLM injection + forecasting: `models/IrregularGPT/IrregularGPT/model/STLlama.py`
    - **Role**: the frozen LLM does **not** take raw time series as input. Instead, it uses:
      - **Dynamics evidence tokens**: compressed latent states exported from the ODE encoder
      - **Auxiliary priors**: text descriptor files (e.g., statistics summaries)
      - **Instruction prompts**: natural-language task instructions (forecast horizon, targets, etc.)
-   - These external tokens are injected into the frozen LLM through the gated injection modules defined in `models/LLMODE/STLlama.py`.
+   - These external tokens are injected into the frozen LLM through the gated injection modules defined in `models/IrregularGPT/IrregularGPT/model/STLlama.py`.
 
 ---
 
@@ -79,9 +79,9 @@ The LLM requires textual prompts to understand the task and context. You need to
 
 With the dynamics evidence and text files prepared, you can now train the main LLM Forecaster.
 
-- **Training script**: `models/LLMODE/llmode_train.sh` (referred to as `train.sh` below) 
-1.  **Configure `train.sh`**:
-    *   Open your training script (`train.sh` or similar).
+- **Training script**: `models/IrregularGPT/IrregularGPT.sh` 
+1.  **Configure `IrregularGPT.sh`**:
+    *   Open your training script (`IrregularGPT.sh` or similar).
     *   Set the correct paths for all your data files and the base model.
 
     ```bash
@@ -101,7 +101,7 @@ With the dynamics evidence and text files prepared, you can now train the main L
 
 2.  **Execute the Script**: Run the shell script to start the training.
     ```bash
-    bash train.sh
+    bash IrregularGPT.sh
     ```
 
 Upon completion, the trained model, containing the weights for the adapters and the regression head, will be saved in the specified `OUTPUT_DIR`.

@@ -13,7 +13,7 @@
 #    limitations under the License.
 
 """
-This script implements the Large Language Model (LLM) portion of the LLMODE framework,
+This script implements the Large Language Model (LLM) portion of the IrregularGPT framework,
 which is designed for irregular spatio-temporal forecasting. It adapts a standard
 Llama model to accept and process continuous-time dynamics from an ODE encoder
 and discrete statistical priors.
@@ -26,8 +26,8 @@ The core components are:
     the forecasting task and computes the training loss.
 
 This implementation corresponds to Sections 3.3, 3.4, and 3.5 of the paper
-"LLMODE: Aligning ODEs with LLMs via Gated Token Injection for Irregular
-Spatio-Temporal Forecasting".
+"Harnessing Continuous-Time LLM Forecasting Over Irregular Spatio-Temporal
+Observations via Progressive Token Injection".
 """
 
 from typing import List, Optional, Tuple, Union
@@ -49,7 +49,7 @@ from .PerceiverResampler import PerceiverResampler, TimeEmbedding, GatedCrossAtt
 class STLlamaConfig(LlamaConfig):
     """
     Custom configuration for the STLlama model. It extends the base LlamaConfig
-    with parameters specific to the LLMODE framework.
+    with parameters specific to the IrregularGPT framework.
     """
     model_type = "STLlama"
 
@@ -86,7 +86,7 @@ class STLlamaModel(LlamaModel):
     """
     The core STLlama model. It modifies the standard Llama architecture to
     incorporate spatio-temporal information through a dual-source gated injection
-    mechanism, as described in the LLMODE paper.
+    mechanism, as described in the IrregularGPT paper.
     """
     config_class = STLlamaConfig
 
@@ -149,7 +149,7 @@ class STLlamaModel(LlamaModel):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
-            # --- Custom Inputs for LLMODE ---
+            # --- Custom Inputs for IrregularGPT ---
             h: Optional[torch.Tensor] = None,                   # ODE latent states [B, T_raw, D_ode]
             mask_obs: Optional[torch.Tensor] = None,            # Observation mask [B, T_raw]
             stat_input_ids: Optional[torch.LongTensor] = None,  # Tokenized descriptors [B, L_stat]
