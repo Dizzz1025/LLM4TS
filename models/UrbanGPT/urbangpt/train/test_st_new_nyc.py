@@ -1,15 +1,18 @@
 import os
 import sys
+import time
 import torch
 import numpy as np
 import json
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer
 import pickle
+
 # import debugpy
 # debugpy.listen(("0.0.0.0", 5678))
 # print("Waiting for debugger attach...")
 # debugpy.wait_for_client()
+
 # 1. 环境路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
@@ -17,12 +20,56 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # 导入自定义模型组件
-from urbangpt.model.STLlama_new_nyc import STLlamaForCausalLM, STLlamaConfig
+# from urbangpt.model.STLlama_new_nyc import STLlamaForCausalLM, STLlamaConfig
+from urbangpt.model.STLlama_new import STLlamaForCausalLM, STLlamaConfig
 
-def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load_path, type, device="cuda"):
+
+def _to_float(value):
+    """把 list / tuple / numpy / torch scalar 统一转成 float，方便统计效率指标。"""
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu()
+        if value.numel() == 1:
+            return float(value.item())
+        return float(value.flatten()[0].item())
+    if isinstance(value, np.ndarray):
+        if value.size == 1:
+            return float(value.item())
+        return float(value.reshape(-1)[0].item())
+    if isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            return 0.0
+        return _to_float(value[0])
+    return float(value)
+
+
+def test_inference(
+    model_path,
+    st_data_path,
+    data_path,
+    text_stats_path,
+    gt_load_path,
+    type,
+    device="cuda",
+    max_samples=None,
+    warmup=1,
+):
     """
-    双路推理测试脚本：支持动态文本 Prompt 和统计先验输入。
+    NYC 双路推理测试脚本：
+    1. 保留 NYC 数据的 gt_load 重写逻辑；
+    2. 参考 test_sim，增加 latency / throughput / GPU memory / token count / LLM seq len 统计；
+    3. max_samples=None 时默认跑完整测试集；如只想快速统计效率，可设置 max_samples=200。
     """
+    latencies = []
+    total_time = 0.0
+    num_effective_samples = 0
+    peak_gpu_mem_mb = 0.0
+    effective_token_counts = []
+    llm_seq_lens = []
+
+    if "cuda" in str(device) and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
     model_path = os.path.abspath(model_path)
     st_data_path = os.path.abspath(st_data_path)
 
@@ -39,24 +86,27 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
     # 2. 加载全量数据
     print("Loading test data and prompts...")
     st_npz = np.load(st_data_path, allow_pickle=True)
-    h_all, mask_all, gt_all = st_npz['h'], st_npz['mask'], st_npz['gt']
-    # print('h_all:', h_all.shape) # (3280, 216, 50) -> zeroshot: 41*80个样本
-    # print('mask_all:', mask_all.shape) # (3280, 216)
-    # print('gt_all:', gt_all.shape) # (3280, 216, 2)
+    h_all, mask_all, gt_all = st_npz["h"], st_npz["mask"], st_npz["gt"]
+
+    # NYC 的预测 GT 单独从 pkl 写回到 144 之后的 query 位置
     with open(gt_load_path, "rb") as f:
-        gt_load = pickle.load(f) # 形状: (Samples, 12, 2)
-    print('gt_load.shape:', gt_load.shape)
+        gt_load = pickle.load(f)  # 形状: (Samples, 12, 2)
+    print("gt_load.shape:", gt_load.shape)
+
     mask_all[:, 144:] = 0
     mask_all[:, 144::6] = 1
     gt_all[:, 144:, :] = 0
     gt_all[:, 144::6, :] = gt_load
-    
+
     with open(data_path, "r") as f:
         prompts_list = json.load(f)
     with open(text_stats_path, "r") as f:
         text_stats_dict = json.load(f)
 
     num_samples = len(prompts_list)
+    if max_samples is not None:
+        num_samples = min(num_samples, int(max_samples))
+
     all_preds, all_gts = [], []
 
     # 3. 循环推理
@@ -65,7 +115,7 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
         for i in range(num_samples):
             # 获取 ID 匹配索引
             sample_data = prompts_list[i]
-            sample_id = int(sample_data.get('id', i))
+            sample_id = int(sample_data.get("id", i))
             sample_key = str(sample_id)
 
             # 准备数值输入
@@ -73,14 +123,17 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
             mask_obs = torch.from_numpy(mask_all[i]).float().unsqueeze(0).to(device)
             gt = torch.from_numpy(gt_all[i]).float().unsqueeze(0).to(device)
 
-            # 准备双路文本输入
             # Path 1: 主 Instruction
-            instruction = sample_data['conversations'][0]['value']
+            instruction = sample_data["conversations"][0]["value"]
             inputs = tokenizer(instruction, return_tensors="pt").to(device)
-            
-            # Path 2: 统计先验 (Stat Input)
+
+            # Path 2: 统计先验
             stat_text = text_stats_dict.get(sample_key, "[SEG_STATS] no_prior [/SEG_STATS]")
             stat_inputs = tokenizer(stat_text, return_tensors="pt", truncation=True).to(device)
+
+            if "cuda" in str(device) and torch.cuda.is_available():
+                torch.cuda.synchronize()
+            start_t = time.perf_counter()
 
             # 调用模型
             outputs = model(
@@ -92,15 +145,50 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
                 mask_obs=mask_obs,
                 return_dict=True,
             )
-            
-            # 提取隐状态 (最后一层)
-            hidden_states = outputs.hidden_states[-1] 
-            
+
+            if "cuda" in str(device) and torch.cuda.is_available():
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - start_t
+
+            # 跳过前 warmup 个样本，避免首轮 CUDA / cache 初始化影响平均延迟
+            if i >= warmup:
+                latencies.append(elapsed * 1000.0)
+                total_time += elapsed
+                num_effective_samples += 1
+
+            if "cuda" in str(device) and torch.cuda.is_available():
+                cur_peak = torch.cuda.max_memory_allocated() / (1024 ** 2)
+                peak_gpu_mem_mb = max(peak_gpu_mem_mb, cur_peak)
+
+            # 统计 token 开销：优先使用模型内部记录的 _efficiency_meta
+            meta = getattr(model.model, "_efficiency_meta", None)
+            if meta is not None:
+                try:
+                    text_prompt_tokens = _to_float(meta["text_prompt_token_count"])
+                    stat_text_tokens = _to_float(meta["stat_text_token_count"])
+                    query_slots = _to_float(meta["query_slot_count"])
+                    feat_latents = _to_float(meta["feat_latent_count"])
+                    text_latents = _to_float(meta["text_latent_count"])
+
+                    llm_seq_len = text_prompt_tokens + query_slots
+                    effective_token_count = (
+                        llm_seq_len + stat_text_tokens + feat_latents + text_latents
+                    )
+
+                    llm_seq_lens.append(llm_seq_len)
+                    effective_token_counts.append(effective_token_count)
+                except KeyError:
+                    # 如果当前模型没有完整记录这些字段，则跳过 token 统计，不影响指标计算
+                    pass
+
+            # 提取隐状态
+            hidden_states = outputs.hidden_states[-1]
+
             # 使用模型内部生成的变长掩码提取预测点
             final_query_mask = model.model._final_query_mask.bool()
-            preds = model.predict_head(hidden_states[final_query_mask]) 
+            preds = model.predict_head(hidden_states[final_query_mask])
 
-            # 对齐真值：对应 61 步之后的观测点
+            # NYC 对齐真值：144 之后才是 query 区域，并且 mask 中每 6 步一个预测点
             query_mask_2d = torch.zeros_like(mask_obs)
             query_mask_2d[:, 144:] = mask_obs[:, 144:]
             query_mask_2d = query_mask_2d.bool()
@@ -110,73 +198,93 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, gt_load
             min_len = min(preds.shape[0], gt_aligned.shape[0])
             all_preds.append(preds[:min_len].cpu())
             all_gts.append(gt_aligned[:min_len].cpu())
-            
+
             if (i + 1) % 100 == 0:
                 print(f"Processed {i + 1}/{num_samples}...")
 
-    # 4. 指标计算 (MSE & MAE)
-    # 将所有样本的预测点拼接成大张量进行全局计算
-    all_preds_cat = torch.cat(all_preds, dim=0) 
+    if len(all_preds) == 0:
+        raise RuntimeError("No predictions were collected. Please check num_samples / max_samples.")
+
+    # 4. 指标计算
+    all_preds_cat = torch.cat(all_preds, dim=0)
     all_gts_cat = torch.cat(all_gts, dim=0)
-    
-    all_preds_final = torch.stack(all_preds, dim=0) 
-    all_gts_final = torch.stack(all_gts, dim=0)
-    # 1. 计算总体指标
-    mse = torch.nn.functional.mse_loss(all_preds_cat, all_gts_cat).item()
-    mae = torch.nn.functional.l1_loss(all_preds_cat, all_gts_cat).item()
 
-    # 2. 分维度计算 (X 为索引 0, Y 为索引 1)
-    # 取出所有样本的第 0 维 (X)
-    preds_x = all_preds_cat[..., 0]
-    gts_x = all_gts_cat[..., 0]
-    mse_x = torch.nn.functional.mse_loss(preds_x, gts_x).item()
-    mae_x = torch.nn.functional.l1_loss(preds_x, gts_x).item()
+    # 若每个样本预测点数量一致，则保存成 (samples, query_points, dim)；否则保存为 object 会不方便后续处理
+    same_len = all(p.shape == all_preds[0].shape for p in all_preds)
+    if same_len:
+        all_preds_final = torch.stack(all_preds, dim=0)
+        all_gts_final = torch.stack(all_gts, dim=0)
+    else:
+        all_preds_final = all_preds_cat
+        all_gts_final = all_gts_cat
+        print("Warning: variable query lengths detected; saved flattened preds/gts.")
 
-    # 取出所有样本的第 1 维 (Y)
-    preds_y = all_preds_cat[..., 1]
-    gts_y = all_gts_cat[..., 1]
-    mse_y = torch.nn.functional.mse_loss(preds_y, gts_y).item()
-    mae_y = torch.nn.functional.l1_loss(preds_y, gts_y).item()
+    # 总体指标
+    overall_mse = torch.nn.functional.mse_loss(all_preds_cat, all_gts_cat).item()
+    overall_mae = torch.nn.functional.l1_loss(all_preds_cat, all_gts_cat).item()
 
-    # 3. 打印结果
-    print("\n" + "="*40)
-    print(f"Dual-Path Test Results (Detailed):")
-    print(f"Total Prediction Points: {all_preds_cat.numel() // 2}") # 总点数
-    print("-" * 40)
-    print(f"{'Metric':<12} | {'MAE':<10} | {'MSE':<10}")
-    print("-" * 40)
-    print(f"{'Overall':<12} | {mae:<10.4f} | {mse:<10.4f}")
-    print(f"{'Dimension X':<12} | {mae_x:<10.4f} | {mse_x:<10.4f}")
-    print(f"{'Dimension Y':<12} | {mae_y:<10.4f} | {mse_y:<10.4f}")
-    print("="*40)
+    # 分维度指标
+    mae_x = torch.nn.functional.l1_loss(all_preds_cat[:, 0], all_gts_cat[:, 0]).item()
+    mse_x = torch.nn.functional.mse_loss(all_preds_cat[:, 0], all_gts_cat[:, 0]).item()
+    mae_y = torch.nn.functional.l1_loss(all_preds_cat[:, 1], all_gts_cat[:, 1]).item()
+    mse_y = torch.nn.functional.mse_loss(all_preds_cat[:, 1], all_gts_cat[:, 1]).item()
 
-    # 保存结果
-    # np.savez(f"preds_gts_dual_{type}.npz", preds=all_preds_cat.numpy(), gts=all_gts_cat.numpy())
-    np.savez(f"new_{type}.npz", preds=all_preds_final.numpy(), gts=all_gts_final.numpy())
-    
-    # 5. 可视化最后一个样本
+    avg_latency_ms = float(np.mean(latencies)) if len(latencies) > 0 else 0.0
+    throughput = num_effective_samples / total_time if total_time > 0 else 0.0
+    avg_token_count = float(np.mean(effective_token_counts)) if len(effective_token_counts) > 0 else 0.0
+    avg_llm_seq_len = float(np.mean(llm_seq_lens)) if len(llm_seq_lens) > 0 else 0.0
+
+    # 5. 打印结果
+    print("\n" + "=" * 70)
+    print(f"Dual-Path NYC Test Results ({type})")
+    print("=" * 70)
+    print(f"Total Samples:            {num_samples}")
+    print(f"Total Prediction Points:  {all_preds_cat.shape[0]}")
+    print("-" * 70)
+    print(f"{'Metric Scope':<15} | {'MAE':<12} | {'MSE':<12}")
+    print("-" * 70)
+    print(f"{'Overall':<15} | {overall_mae:<12.4f} | {overall_mse:<12.4f}")
+    print(f"{'Dimension X':<15} | {mae_x:<12.4f} | {mse_x:<12.4f}")
+    print(f"{'Dimension Y':<15} | {mae_y:<12.4f} | {mse_y:<12.4f}")
+    print("-" * 70)
+    print(f"Latency (ms/sample):      {avg_latency_ms:.4f}")
+    print(f"Peak GPU Mem (MB):        {peak_gpu_mem_mb:.2f}")
+    print(f"Throughput (samples/s):   {throughput:.4f}")
+    print(f"Token Count:              {avg_token_count:.2f}")
+    print(f"LLM Seq Len:              {avg_llm_seq_len:.2f}")
+    print("=" * 70 + "\n")
+
+    # 6. 保存结果
+    save_name = f"new_{type}.npz"
+    np.savez(save_name, preds=all_preds_final.numpy(), gts=all_gts_final.numpy())
+    print(f"Results saved to {save_name}")
+
+    # 7. 可视化最后一个样本
     plt.figure(figsize=(10, 5))
     draw_len = min(48, len(all_preds[-1]))
-    plt.plot(all_gts[-1][:draw_len, 0], all_gts[-1][:draw_len, 1], label='GT', color='blue', marker='o')
-    plt.plot(all_preds[-1][:draw_len, 0], all_preds[-1][:draw_len, 1], label='Pred', color='red', linestyle='--', marker='x')
+    plt.plot(all_gts[-1][:draw_len, 0], all_gts[-1][:draw_len, 1], label="GT", color="blue", marker="o")
+    plt.plot(all_preds[-1][:draw_len, 0], all_preds[-1][:draw_len, 1], label="Pred", color="red", linestyle="--", marker="x")
     plt.legend()
-    plt.title(f"Dual-Path Check (MSE: {mse:.6e})")
-    plt.savefig("test_dual_visual.png")
+    plt.title(f"Dual-Path NYC Check ({type}, MSE: {overall_mse:.6e})")
+    fig_name = f"test_dual_visual_{type}.png"
+    plt.savefig(fig_name)
+    print(f"Figure saved to {fig_name}")
+
 
 if __name__ == "__main__":
     # TYPE = "taxi_supervised"    
-    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
-    # ST_DATA_PATH = f"{project_root}/data/NYC/taxi/h_mask_gt_taxi_supervised.npz"
-    # DATA_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2021-12_irregular_region_1_80_norm_formatted.json"
-    # TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2021-12_text_stats.json"
-    # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCtaxi_2021-12_gt.pkl"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_k1/checkpoint-88290"
+    # ST_DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/taxi/new_data/h_mask_gt_taxi_supervised.npz"
+    # DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/taxi/new_data/NYCtaxi_2021-12_irregular_region_1_80_norm_formatted.json"
+    # TEXT_STATS_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/taxi/new_data/NYCtaxi_2021-12_text_stats.json"
+    # GT_LOAD_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/llmode/train/nyc_gt/new_data/NYCtaxi_2021-12_gt.pkl"
     
-    TYPE = "taxi_zeroshot"
-    MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
-    ST_DATA_PATH = f"{project_root}/data/NYC/taxi/h_mask_gt_taxi_zeroshot.npz"
-    DATA_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json"
-    TEXT_STATS_PATH = f"{project_root}/data/NYC/taxi/NYCtaxi_2020-01_text_stats.json"
-    GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCtaxi_2020-01_gt.pkl"
+    # TYPE = "taxi_zeroshot"
+    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_k90/checkpoint-170040"
+    # ST_DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/taxi/new_data/h_mask_gt_taxi_zeroshot.npz"
+    # DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/taxi/new_data/NYCtaxi_2020-01_irregular_region_81_160_norm_formatted.json"
+    # TEXT_STATS_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/taxi/new_data/NYCtaxi_2020-01_text_stats.json"
+    # GT_LOAD_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/llmode/train/nyc_gt/new_data/NYCtaxi_2020-01_gt.pkl"
     
     # TYPE = "taxi_supervised"    
     # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
@@ -199,12 +307,12 @@ if __name__ == "__main__":
     # TEXT_STATS_PATH = f"{project_root}/data/NYC/bike/NYCbike_2021-12_text_stats.json"
     # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCbike_2021-12_gt.pkl"
     
-    # TYPE = "bike_zeroshot"
-    # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
-    # ST_DATA_PATH = f"{project_root}/data/NYC/bike/h_mask_gt_bike_zeroshot.npz"
-    # DATA_PATH = f"{project_root}/data/NYC/bike/NYCbike_2020-01_irregular_region_81_160_norm_formatted.json"
-    # TEXT_STATS_PATH = f"{project_root}/data/NYC/bike/NYCbike_2020-01_text_stats.json"
-    # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCbike_2020-01_gt.pkl"
+    TYPE = "bike_zeroshot"
+    MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_k90/checkpoint-170040"
+    ST_DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/bike/h_mask_gt_bike_zeroshot.npz"
+    DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/bike/NYCbike_2020-01_irregular_region_81_160_norm_formatted.json"
+    TEXT_STATS_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/NYC/bike/NYCbike_2020-01_text_stats.json"
+    GT_LOAD_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/llmode/train/nyc_gt/NYCbike_2020-01_gt.pkl"
     
     # TYPE = "crime_supervised"
     # MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/NYC_v3_daice/checkpoint-47415"
@@ -220,4 +328,5 @@ if __name__ == "__main__":
     # TEXT_STATS_PATH = f"{project_root}/data/NYC/crime/NYCcrime_2020_text_stats.json"
     # GT_LOAD_PATH = f"{project_root}/urbangpt/train/nyc_gt/NYCcrime_2020_gt.pkl"
     
+    # 如果想和 test_sim 一样只快速测试 200 个样本，可以加 max_samples=200
     test_inference(MODEL_PATH, ST_DATA_PATH, DATA_PATH, TEXT_STATS_PATH, GT_LOAD_PATH, TYPE)

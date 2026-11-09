@@ -219,7 +219,7 @@ class STLlamaModel(LlamaModel):
         for b in range(batch_size):
             full_mask = mask_obs[b]  # [T_raw]
             pred_mask = torch.zeros_like(full_mask)
-            pred_mask[60:] = full_mask[60:]
+            pred_mask[144:] = full_mask[144:]
             prediction_mask_list.append(pred_mask)            
             # 获取观测值的时间索引
             # indices: [Num_Obs]
@@ -263,6 +263,30 @@ class STLlamaModel(LlamaModel):
             padded_embeds[b, :length] = combined_embeds_list[b]
             padded_attention_mask[b, :length] = 1 
             final_query_mask[b, :length] = query_slots_mask_list[b]
+
+        # 在 STLlamaModel.forward 里，构造完 feat_kv / text_kv / final_query_mask 后
+        query_slot_count = final_query_mask.sum(dim=1)  # [B]
+
+        text_prompt_token_count = []
+        stat_text_token_count = []
+
+        for b in range(batch_size):
+            text_prompt_token_count.append(int((input_ids[b] != 0).sum().item()))
+            if stat_input_ids is not None:
+                stat_text_token_count.append(int((stat_input_ids[b] != 0).sum().item()))
+            else:
+                stat_text_token_count.append(0)
+
+        feat_latent_count = feat_kv.shape[1] if feat_kv is not None else 0
+        text_latent_count = text_kv.shape[1] if stat_input_ids is not None else 0
+
+        self._efficiency_meta = {
+            "text_prompt_token_count": text_prompt_token_count,   # list[int], len=B
+            "stat_text_token_count": stat_text_token_count,       # list[int], len=B
+            "query_slot_count": query_slot_count.detach().cpu().tolist(),
+            "feat_latent_count": int(feat_latent_count),
+            "text_latent_count": int(text_latent_count),
+        }
 
         # --- 掩码处理：2D -> 4D ---
         if attention_mask is None or attention_mask.dim() == 2:
@@ -446,7 +470,7 @@ class STLlamaForCausalLM(LlamaForCausalLM):
             # mask_obs 和 query_mask 在逻辑上是对齐的（按顺序生成）
             # 直接使用 mask_obs 提取对应的 GT 值
             obs_mask_60 = torch.zeros_like(mask_obs)
-            obs_mask_60[:, 60:] = mask_obs[:, 60:]
+            obs_mask_60[:, 144:] = mask_obs[:, 144:]
             obs_mask_60 = obs_mask_60.bool() # gt.shape = [1, 120, 2]
             true_values = gt[obs_mask_60].to(preds.device).to(preds.dtype)
             # Calculate Loss

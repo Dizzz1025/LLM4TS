@@ -206,7 +206,7 @@ def test_inference(model_path, st_data_path, data_path, text_stats_path, device=
     # plt.savefig("test_springs5_visual.png")
 
 if __name__ == "__main__":
-    MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/Sim_k120/checkpoint-87500"
+    MODEL_PATH = f"/home/zhangdi24/LLM4TS/models/UrbanGPT/checkpoints/Sim_k8/checkpoint-75000"
     ST_DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/Sim/springs/h_mask_gt_springs.npz"
     DATA_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/Sim/springs/Springs_test_prompts.json"
     TEXT_STATS_PATH = f"/home/zhangdi24/LLM4TS/models/LLMODE/data/Sim/springs/Simsystem_text_stats.json"

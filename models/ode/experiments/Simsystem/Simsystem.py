@@ -14,6 +14,11 @@ import time
 import tqdm
 from sklearn.metrics import roc_auc_score
 from gru_ode_bayes import Logger
+# import debugpy
+# debugpy.listen(5678)
+# print('Waiting for debugger to attach...')
+# debugpy.wait_for_client()
+# print('Debugger attached.')
 
 def train_gruode(simulation_name,params_dict,device, train_idx, val_idx, test_idx, epoch_max=40):
     csv_file_path = params_dict["csv_file_path"]
@@ -287,9 +292,8 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test):
 
 if __name__ =="__main__":
 
-    simulation_name="Simsystem_v17_merged_100"
+    simulation_name="Simsystem_tk4"
     device = torch.device("cuda")
-
 
     train_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_merged/fold_0/train_idx.npy",allow_pickle=True)
     val_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_merged/fold_0/val_idx.npy",allow_pickle=True)
@@ -308,7 +312,7 @@ if __name__ =="__main__":
     params_dict["prep_hidden"] = 10
     params_dict["logvar"] = True
     params_dict["mixing"] = 1e-4 #Weighting between KL loss and MSE loss.
-    params_dict["delta_t"]=1
+    params_dict["delta_t"]=0.5
     params_dict["T"] = 120
     params_dict["lambda"] = 0 #Weighting between classification and MSE loss.
 

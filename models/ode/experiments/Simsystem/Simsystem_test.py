@@ -14,7 +14,11 @@ import time
 import tqdm
 from sklearn.metrics import roc_auc_score
 from gru_ode_bayes import Logger
-
+import debugpy
+debugpy.listen(5678)
+print('Waiting for debugger to attach...')
+debugpy.wait_for_client()
+print('Debugger attached.')
 def test_evaluation(model, params_dict, class_criterion, device, dl_test, simulation_name):
     with torch.no_grad():
         model.eval()
@@ -25,6 +29,11 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test, simula
         mse_per_feature = np.zeros(2)
         mae_per_feature = np.zeros(2)
         num_obs_per_feature = np.zeros(2)
+
+        # 新增：latency统计
+        total_latency = 0.0
+        total_batches = 0
+        total_samples = 0
         
         h_cache = []
         all_p_vecs_trimmed = [] # 保存预测路径的前两维
@@ -47,12 +56,26 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test, simula
             times_val = b["times_val"]
             times_idx = b["index_val"]
 
+            # ========= 新增：计时开始 =========
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            start_time = time.perf_counter()
+
             hT, loss, class_pred, t_vec, p_vec, h_vec, _ , _ = model(
                 times, time_ptr, X, M, obs_idx, delta_t=params_dict["delta_t"], 
                 T=params_dict["T"], cov=cov, return_path=True, 
                 group_idx=group_id, edge_index=edge_index, test=True
             )
             
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            end_time = time.perf_counter()
+            # ========= 新增：计时结束 =========
+            batch_latency = end_time - start_time
+            total_latency += batch_latency
+            total_batches += 1
+            total_samples += batch_size
+
             # 保存 h_vec (原有逻辑)
             h_vec_trimmed = h_vec[:-1, :, :].permute(1, 0, 2)
             h_cache.append(h_vec_trimmed.cpu().numpy())
@@ -92,11 +115,15 @@ def test_evaluation(model, params_dict, class_criterion, device, dl_test, simula
             np.save(f"test_p_vec_{simulation_name}.npy", final_p_vecs)
         except ValueError:
             np.save(f"test_p_vec_{simulation_name}.npy", np.array(all_p_vecs_trimmed, dtype=object))
-
+        
+        avg_batch_latency_ms = (total_latency / total_batches) * 1000 if total_batches > 0 else 0
+        avg_sample_latency_ms = (total_latency / total_samples) * 1000 if total_samples > 0 else 0
+        
         return (loss_test/num_obs if num_obs>0 else 0, 
                 mae_per_feature[0], mae_per_feature[1], 
                 mse_per_feature[0], mse_per_feature[1], 
-                num_obs, h_cache)
+                num_obs, h_cache,
+                total_latency, avg_batch_latency_ms, avg_sample_latency_ms)
 
 if __name__ =="__main__":
 
@@ -106,7 +133,7 @@ if __name__ =="__main__":
 
     # train_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/train_idx.npy",allow_pickle=True)
     # val_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/val_idx.npy",allow_pickle=True)
-    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_gen_h_charged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
+    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_springs/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
     
     
     #Model parameters.
@@ -166,13 +193,12 @@ if __name__ =="__main__":
                                             cov_size = params_dict["cov_size"], cov_hidden = params_dict["cov_hidden"],
                                             dropout_rate = params_dict["dropout_rate"],full_gru_ode= params_dict["full_gru_ode"], 
                                             impute = params_dict["impute"], dataset='Sim').to(device)
-    state_dict = torch.load('../trained_models/Simsystem_v17_merged_100/Simsystem_v17_merged_100_MAX_comfirm.pt', map_location=device)
+    state_dict = torch.load('../trained_models/Simsystem_tk4/Simsystem_tk4_MAX.pt', map_location=device)
     model.load_state_dict(state_dict)
     
 # 调用评估函数
-    loglik, mae0, mae1, mse0, mse1, num_obs, h_cache = test_evaluation(
-        model, params_dict, class_criterion, device, dl_test, simulation_name
-    )
+    loglik, mae0, mae1, mse0, mse1, num_obs, h_cache, total_latency, avg_batch_latency_ms, avg_sample_latency_ms = test_evaluation(
+    model, params_dict, class_criterion, device, dl_test, simulation_name)
 
     # 按照要求的顺序打印
     print("\n" + "="*40)
@@ -180,6 +206,9 @@ if __name__ =="__main__":
     print("="*40)
     print(f"Log-Likelihood: {loglik:.6f}")
     print(f"Total Observations: {num_obs}")
+    print(f"Total Inference Time: {total_latency:.4f} s")
+    print(f"Average Batch Latency: {avg_batch_latency_ms:.4f} ms/batch")
+    print(f"Average Sample Latency: {avg_sample_latency_ms:.4f} ms/sample")
     print("-" * 40)
 
     # 先打印 Dim 0 的 MAE 和 MSE

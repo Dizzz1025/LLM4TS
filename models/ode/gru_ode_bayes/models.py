@@ -4,6 +4,7 @@ import numpy as np
 from torchdiffeq import odeint
 
 from torch.nn.utils.rnn import pack_padded_sequence
+import torch.nn.functional as F
 
 # GRU-ODE: Neural Negative Feedback ODE with Bayesian jumps
 
@@ -401,7 +402,7 @@ class TimeMixerForecastDilatedConv(torch.nn.Module):
 
 class NNFOwithBayesianJumps(torch.nn.Module):
     ## Neural Negative Feedback ODE with Bayesian jumps
-    def __init__(self, input_size, hidden_size, p_hidden, prep_hidden, bias=True, cov_size=1, cov_hidden=1, classification_hidden=1, logvar=True, mixing=1, dropout_rate=0, full_gru_ode=False, solver="euler", impute = True, stage=None, dataset=None, **options):
+    def __init__(self, input_size, hidden_size, p_hidden, prep_hidden, bias=True, cov_size=1, cov_hidden=1, classification_hidden=1, logvar=True, mixing=1, dropout_rate=0, full_gru_ode=False, solver="rk4", impute = True, stage=None, dataset=None, **options):
         """
         The smoother variable computes the classification loss as a weighted average of the projection of the latents at each observation.
         impute feeds the parameters of the distribution to GRU-ODE at each step.
@@ -455,7 +456,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
             torch.nn.Tanh()
         )
 
-        assert solver in ["euler", "midpoint", "dopri5"], "Solver must be either 'euler' or 'midpoint' or 'dopri5'."
+        assert solver in ["euler", "midpoint", "dopri5", "rk4"], "Solver must be either 'euler' or 'midpoint' or 'dopri5' or 'rk4'."
 
         self.solver     = solver
         self.store_hist = options.pop("store_hist",False)
@@ -480,10 +481,34 @@ class NNFOwithBayesianJumps(torch.nn.Module):
         
         self.time_proj_weight = torch.nn.Parameter(torch.randn(self.T_pred, self.L_resample))
         self.time_proj_bias = torch.nn.Parameter(torch.zeros(self.T_pred))
-        self.forecast_head = TimeMixerForecastDilatedConv(L=self.L_resample, T_pred=self.T_pred, H=hidden_size, num_layers=3, dropout=0.1)
+        self.forecast_head = TimeMixerForecastDilatedConv(L=self.L_resample, T_pred=self.T_pred, H=hidden_size, num_layers=5, dropout=0.1)
         self.stage = stage
         self.latent_cache = {}
+    def _resample_latent_seq(self, latent_seq: torch.Tensor) -> torch.Tensor:
+        """
+        latent_seq: [B, L, H]
+        return:     [B, self.L_resample, H]
+        """
+        target_len = self.L_resample
+        cur_len = latent_seq.shape[1]
 
+        if cur_len == target_len:
+            return latent_seq
+
+        # [B, L, H] -> [B, H, L]
+        x = latent_seq.permute(0, 2, 1)
+
+        # 线性插值到固定长度 target_len
+        x = F.interpolate(
+            x,
+            size=target_len,
+            mode="linear",
+            align_corners=False
+        )
+
+        # [B, H, L] -> [B, L, H]
+        x = x.permute(0, 2, 1)
+        return x
     def _apply_group_attention(self, h, group_idx, K=5):
         """
         h: [B, H]
@@ -551,6 +576,30 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                 eval_ps = self.p_model(torch.stack([ev[0] for ev in eval_vals]))
             eval_times = torch.stack(eval_times) + current_time
             h = solution[1,:,:]
+            p = self.p_model(h)
+        
+        elif self.solver == "rk4":
+            h0 = h
+            k1 = self.gru_c(p, h0)
+
+            h2 = h0 + 0.5 * delta_t * k1
+            p2 = self.p_model(h2)
+            k2 = self.gru_c(p2, h2)
+
+            h3 = h0 + 0.5 * delta_t * k2
+            p3 = self.p_model(h3)
+            k3 = self.gru_c(p3, h3)
+
+            h4 = h0 + delta_t * k3
+            p4 = self.p_model(h4)
+            k4 = self.gru_c(p4, h4)
+
+            h = h0 + (delta_t / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
+            agg = self.graph_corr(h0, self.edge_index)
+            g = self.graph_gate(torch.cat([h0, agg], dim=-1))
+            h = h + self.graph_lambda * g * agg
+
             p = self.p_model(h)
         
         current_time += delta_t
@@ -677,7 +726,11 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                     path_t.append(current_time)
                     path_p.append(p)
                     path_h.append(h)      
+            # latent_seq = torch.stack(path_h, dim=1)  # [B, L, H]
+            # pred = self.forecast_head(latent_seq)  # [B, T_pred, H]
             latent_seq = torch.stack(path_h, dim=1)  # [B, L, H]
+            latent_seq_raw = latent_seq
+            latent_seq = self._resample_latent_seq(latent_seq)  # [B, 120, H]
             pred = self.forecast_head(latent_seq)  # [B, T_pred, H]
             pred_seq = pred.permute(1, 0, 2) # [T_pred, B, H]
             path_h = []
@@ -782,6 +835,8 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                     path_p.append(p)
                     path_h.append(h)      
             latent_seq = torch.stack(path_h, dim=1)  # [B, L, H]
+            latent_seq_raw = latent_seq
+            latent_seq = self._resample_latent_seq(latent_seq)  # [B, 120, H]
             pred = self.forecast_head(latent_seq)  # [B, T_pred, H]
             pred_seq = pred.permute(1, 0, 2) # [T_pred, B, H]
             # path_h = []

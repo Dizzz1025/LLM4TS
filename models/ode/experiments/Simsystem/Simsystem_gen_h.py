@@ -212,7 +212,8 @@ if __name__ =="__main__":
 
     # train_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/train_idx.npy",allow_pickle=True)
     # val_idx = np.load("../../gru_ode_bayes/datasets/NYCtaxi/folds/small_chunk_fold_idx_0/val_idx.npy",allow_pickle=True)
-    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_gen_h_merged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
+    # test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_gen_h_merged/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
+    test_idx = np.load("../../gru_ode_bayes/datasets/Simsystem/folds_springs/small_chunk_fold_idx_0/test_idx.npy",allow_pickle=True)
     #Model parameters.
     params_dict=dict()
 
